@@ -12,6 +12,20 @@ Great engineering lessons are hidden inside open-source repositories: performanc
 
 Accelerate aims to uncover these lessons and turn them into opportunities to learn by doing.
 
+## Local configuration
+
+Install the dependencies, copy `.env.example` to `.env`, and add your
+credentials to `.env`:
+
+```powershell
+Copy-Item .env.example .env
+& ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
+```
+
+The application reads `GITHUB_TOKEN`, `GEMINI_API_KEY`, and the optional
+`OPENROUTER_API_KEY` from `.env`. The `.env` file is ignored by Git and must
+never be committed.
+
 **The core loop:**
 
 1. Enter a GitHub repository.

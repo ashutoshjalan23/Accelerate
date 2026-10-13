@@ -1,6 +1,7 @@
 """LLM adapters used by the agent workflows."""
 
 import json
+import logging
 import os
 import re
 import time
@@ -8,7 +9,9 @@ from collections.abc import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .schemas import CodeContext, CommitAssessment, CommitData
+from .schemas import CodeContext, CommitAssessment, CommitData, GeneratedProblem
+
+logger = logging.getLogger(__name__)
 
 
 CURATOR_ASSESSMENT_PROMPT = """\
@@ -78,7 +81,8 @@ Explain:
 2. why the old behavior failed or did not meet its requirements,
 3. what behavior the fix establishes,
 4. the requirements and constraints a learner should satisfy, and
-5. any repository paths or evidence still needed to make the explanation
+5. which retrieved before-state files are relevant to the learner, and
+6. any repository paths or evidence still needed to make the explanation
    reliable.
 
 Only put concrete repository-relative file paths in missing_context. Each
@@ -86,6 +90,7 @@ item must contain only the path, with no explanation, punctuation, or
 additional text. Use an empty list when no extra file is required.
 Return only valid JSON matching this schema:
 {{"issue_explanation": "...", "requirements": ["..."],
+"relevant_files": ["exact/retrieved/path.py"],
 "missing_context": ["..."]}}
 
 Commit:
@@ -96,6 +101,49 @@ Before code:
 
 After code:
 {after_code}
+"""
+
+PROBLEM_DRAFT_PROMPT = """\
+You are the Problem Creator Agent for Accelerate.
+
+Turn the engineering analysis into a self-contained programming or
+system-design challenge. The learner must solve the underlying problem, not
+reproduce the maintainer's patch. Use only the supplied repository evidence.
+
+Write a clear title and description, functional requirements, constraints,
+examples, and hidden test cases. Do not reproduce source code in your
+response: starter files are materialized from the supplied before-state by
+the application after generation.
+Do not invent repository files or APIs. Do not reveal the reference solution
+in the learner-facing description.
+
+Return only valid JSON matching this schema:
+{{"title": "...", "description": "...", "constraints": ["..."],
+"starting_code": "", "starter_files": {{}},
+"examples": [{{"input": "...", "output": "..."}}],
+"hidden_test_cases": [{{"input": "...", "output": "..."}}],
+"reference_solution": "...", "source_commit_sha": "..."}}
+
+Engineering context:
+{context}
+"""
+
+PROBLEM_VALIDATION_PROMPT = """\
+You are the quality gate for an Accelerate challenge.
+
+Check whether this generated challenge is self-contained, grounded in the
+source context, solvable by a learner, and objectively evaluable. Reject it
+if it relies on undocumented repository knowledge, leaks the reference
+solution, has inconsistent examples or tests, or lacks a concrete task.
+
+Return only valid JSON:
+{{"valid": true, "reason": "brief evidence-based explanation"}}
+
+Source context:
+{context}
+
+Generated challenge:
+{problem}
 """
 
 
@@ -111,13 +159,19 @@ class CuratorLLMClient:
         openrouter_model: str | None = None,
         openrouter_url: str = "https://openrouter.ai/api/v1/chat/completions",
         http_post: Callable[[Request], bytes] | None = None,
-        gemini_retries: int = 2,
+        gemini_retries: int = 1,
         retry_delay_seconds: float = 2.0,
+        request_timeout_seconds: float = 30.0,
+        max_output_tokens: int = 2048,
     ) -> None:
         if gemini_retries < 0:
             raise ValueError("gemini_retries must be zero or greater.")
         if retry_delay_seconds < 0:
             raise ValueError("retry_delay_seconds must be zero or greater.")
+        if request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be greater than zero.")
+        if max_output_tokens < 1:
+            raise ValueError("max_output_tokens must be at least 1.")
         self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY")
         self.gemini_model = gemini_model or os.getenv(
             "GEMINI_MODEL", "gemini-3.5-flash"
@@ -130,6 +184,8 @@ class CuratorLLMClient:
         self._http_post = http_post or self._default_http_post
         self.gemini_retries = gemini_retries
         self.retry_delay_seconds = retry_delay_seconds
+        self.request_timeout_seconds = request_timeout_seconds
+        self.max_output_tokens = max_output_tokens
 
     def assess_commit(self, commit: CommitData) -> CommitAssessment:
         """Ask the primary provider, then use the configured fallback."""
@@ -193,12 +249,21 @@ class CuratorLLMClient:
             missing_context = [
                 self._normalize_context_path(item) for item in missing_context
             ]
+            relevant_files = data.get("relevant_files", list(before_code))
+            if not isinstance(relevant_files, list) or not all(
+                isinstance(item, str) for item in relevant_files
+            ):
+                raise TypeError("relevant_files must be a list of strings")
+            relevant_files = [
+                self._normalize_context_path(item) for item in relevant_files
+            ]
             return CodeContext(
                 commit=commit,
                 before_code=before_code,
                 after_code=after_code,
                 issue_explanation=data["issue_explanation"],
                 requirements=requirements,
+                relevant_files=relevant_files,
                 missing_context=missing_context,
             )
         except (KeyError, TypeError, ValueError) as error:
@@ -222,16 +287,26 @@ class CuratorLLMClient:
             )
         return candidate
 
-    def _generate_json(self, prompt: str) -> dict[str, object]:
+    def _generate_json(
+        self, prompt: str, *, max_output_tokens: int | None = None
+    ) -> dict[str, object]:
         errors: list[str] = []
         if self.gemini_api_key:
             try:
-                return self._parse_json(self._generate_with_gemini_with_retry(prompt))
+                return self._parse_json(
+                    self._generate_with_gemini_with_retry(
+                        prompt, max_output_tokens=max_output_tokens
+                    )
+                )
             except Exception as error:
                 errors.append(f"Gemini: {error}")
         if self.openrouter_api_key:
             try:
-                return self._parse_json(self._generate_with_openrouter(prompt))
+                return self._parse_json(
+                    self._generate_with_openrouter(
+                        prompt, max_output_tokens=max_output_tokens
+                    )
+                )
             except Exception as error:
                 errors.append(f"OpenRouter: {error}")
         if not errors:
@@ -241,14 +316,67 @@ class CuratorLLMClient:
             )
         raise RuntimeError("All configured LLM providers failed: " + "; ".join(errors))
 
-    def _generate_with_gemini_with_retry(self, prompt: str) -> str | None:
+    def draft_problem(self, context: CodeContext) -> GeneratedProblem:
+        """Generate a challenge from the analyst's before-state context."""
+
+        prompt = PROBLEM_DRAFT_PROMPT.format(
+            context=json.dumps(self._problem_context_payload(context), indent=2)
+        )
+        data = self._generate_json(prompt, max_output_tokens=2048)
+        try:
+            return GeneratedProblem.model_validate(data)
+        except ValueError as error:
+            raise RuntimeError("The LLM returned an invalid generated problem.") from error
+
+    def validate_problem(
+        self, problem: GeneratedProblem, context: CodeContext
+    ) -> tuple[bool, str]:
+        """Validate a generated challenge with the configured LLM."""
+
+        prompt = PROBLEM_VALIDATION_PROMPT.format(
+            context=json.dumps(context.model_dump(mode="json"), indent=2),
+            problem=json.dumps(problem.model_dump(mode="json"), indent=2),
+        )
+        data = self._generate_json(prompt, max_output_tokens=512)
+        valid = data.get("valid")
+        reason = data.get("reason")
+        if not isinstance(valid, bool) or not isinstance(reason, str):
+            raise RuntimeError("The LLM returned invalid problem validation JSON.")
+        return valid, reason
+
+    @staticmethod
+    def _problem_context_payload(context: CodeContext) -> dict[str, object]:
+        """Keep source snapshots out of the drafting request."""
+
+        return {
+            "repository": context.commit.repository,
+            "commit_sha": context.commit.commit_sha,
+            "commit_message": context.commit.message,
+            "diff": context.commit.diff,
+            "issue_explanation": context.issue_explanation,
+            "requirements": context.requirements,
+            "relevant_files": context.relevant_files,
+        }
+
+    def _generate_with_gemini_with_retry(
+        self, prompt: str, *, max_output_tokens: int | None = None
+    ) -> str | None:
         attempts = self.gemini_retries + 1
         last_error: Exception | None = None
         for attempt in range(attempts):
             try:
-                return self._generate_with_gemini(prompt)
+                logger.info(
+                    "Calling Gemini (attempt %d/%d, timeout %.1fs).",
+                    attempt + 1,
+                    attempts,
+                    self.request_timeout_seconds,
+                )
+                return self._generate_with_gemini(
+                    prompt, max_output_tokens=max_output_tokens
+                )
             except Exception as error:
                 last_error = error
+                logger.warning("Gemini attempt %d failed: %s", attempt + 1, error)
                 if attempt == attempts - 1:
                     break
                 time.sleep(self.retry_delay_seconds * (2**attempt))
@@ -261,9 +389,16 @@ class CuratorLLMClient:
         last_error: Exception | None = None
         for attempt in range(attempts):
             try:
+                logger.info(
+                    "Calling Gemini curator assessment (attempt %d/%d, timeout %.1fs).",
+                    attempt + 1,
+                    attempts,
+                    self.request_timeout_seconds,
+                )
                 return self._assess_with_gemini(prompt)
             except Exception as error:
                 last_error = error
+                logger.warning("Gemini curator attempt %d failed: %s", attempt + 1, error)
                 if attempt == attempts - 1:
                     break
                 time.sleep(self.retry_delay_seconds * (2**attempt))
@@ -272,7 +407,9 @@ class CuratorLLMClient:
     def _assess_with_gemini(self, prompt: str) -> CommitAssessment:
         return self._parse_assessment(self._generate_with_gemini(prompt))
 
-    def _generate_with_gemini(self, prompt: str) -> str | None:
+    def _generate_with_gemini(
+        self, prompt: str, *, max_output_tokens: int | None = None
+    ) -> str | None:
         try:
             from google import genai
         except ImportError as error:
@@ -280,23 +417,40 @@ class CuratorLLMClient:
                 "The Google GenAI SDK is required for Gemini support."
             ) from error
 
-        client = genai.Client(api_key=self.gemini_api_key)
+        from google.genai import types
+
+        client = genai.Client(
+            api_key=self.gemini_api_key,
+            http_options=types.HttpOptions(
+                timeout=int(self.request_timeout_seconds * 1000)
+            ),
+        )
         response = client.models.generate_content(
             model=self.gemini_model,
             contents=prompt,
-            config={"response_mime_type": "application/json"},
+            config={
+                "response_mime_type": "application/json",
+                "max_output_tokens": max_output_tokens or self.max_output_tokens,
+            },
         )
         return response.text
 
     def _assess_with_openrouter(self, prompt: str) -> CommitAssessment:
         return self._parse_assessment(self._generate_with_openrouter(prompt))
 
-    def _generate_with_openrouter(self, prompt: str) -> str:
+    def _generate_with_openrouter(
+        self, prompt: str, *, max_output_tokens: int | None = None
+    ) -> str:
+        logger.info(
+            "Calling OpenRouter (timeout %.1fs).", self.request_timeout_seconds
+        )
         payload = json.dumps(
             {
                 "model": self.openrouter_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "response_format": {"type": "json_object"},
+                "max_tokens": max_output_tokens or self.max_output_tokens,
+                "reasoning": {"enabled": False},
             }
         ).encode("utf-8")
         request = Request(
@@ -310,21 +464,37 @@ class CuratorLLMClient:
         )
         response = json.loads(self._http_post(request).decode("utf-8"))
         try:
-            content = response["choices"][0]["message"]["content"]
+            choice = response["choices"][0]
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
             raise RuntimeError("OpenRouter returned an invalid completion.") from error
         if not isinstance(content, str):
             raise RuntimeError("OpenRouter returned non-text completion content.")
+        if choice.get("finish_reason") == "length":
+            raise RuntimeError(
+                "OpenRouter truncated the JSON completion at the output limit."
+            )
         return content
 
     @staticmethod
     def _parse_json(content: str | None) -> dict[str, object]:
         if not content:
             raise RuntimeError("The LLM returned an empty response.")
+        candidate = content.strip()
+        fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", candidate, re.DOTALL)
+        if fenced:
+            candidate = fenced.group(1).strip()
         try:
-            data = json.loads(content)
-        except (json.JSONDecodeError, TypeError) as error:
-            raise RuntimeError("The LLM returned invalid JSON.") from error
+            data = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            try:
+                start = candidate.index("{")
+                data, _ = json.JSONDecoder().raw_decode(candidate[start:])
+            except (ValueError, json.JSONDecodeError) as error:
+                excerpt = " ".join(candidate[:240].split())
+                raise RuntimeError(
+                    f"The LLM returned invalid JSON: {excerpt!r}"
+                ) from error
         if not isinstance(data, dict):
             raise RuntimeError("The LLM returned a JSON value instead of an object.")
         return data
@@ -339,10 +509,18 @@ class CuratorLLMClient:
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             raise RuntimeError("The LLM returned invalid assessment JSON.") from error
 
-    @staticmethod
-    def _default_http_post(request: Request) -> bytes:
+    def _default_http_post(self, request: Request) -> bytes:
         try:
-            with urlopen(request, timeout=60) as response:
+            with urlopen(request, timeout=self.request_timeout_seconds) as response:
                 return response.read()
-        except (HTTPError, URLError) as error:
+        except HTTPError as error:
+            try:
+                details = error.read().decode("utf-8", errors="replace")
+            except OSError:
+                details = ""
+            suffix = f": {details[:500]}" if details else ""
+            raise RuntimeError(
+                f"OpenRouter request failed with HTTP {error.code}{suffix}"
+            ) from error
+        except URLError as error:
             raise RuntimeError(f"OpenRouter request failed: {error}") from error

@@ -39,7 +39,9 @@ class LLMClient(Protocol):
     def draft_problem(self, context: CodeContext) -> GeneratedProblem:
         ...
 
-    def validate_problem(self, problem: GeneratedProblem) -> tuple[bool, str]:
+    def validate_problem(
+        self, problem: GeneratedProblem, context: CodeContext
+    ) -> tuple[bool, str]:
         ...
 
     def review_submission(

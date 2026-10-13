@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app.agents.engineering_analyst import EngineeringAnalystAgent
+from app.cache import load_analyst_context, save_analyst_context
 from app.agents.llm import CuratorLLMClient
 from app.integrations.github import GitHubApiError, GitHubClientAdapter
 
@@ -39,11 +40,17 @@ def main() -> int:
         github = GitHubClientAdapter()
         llm = CuratorLLMClient()
         commit = github.get_commit(args.repository, args.sha)
-        context = EngineeringAnalystAgent(
-            github=github,
-            llm=llm,
-            max_iterations=args.max_iterations,
-        ).run(commit)
+        context = load_analyst_context(commit.repository, commit.commit_sha)
+        if context is None:
+            context = EngineeringAnalystAgent(
+                github=github,
+                llm=llm,
+                max_iterations=args.max_iterations,
+            ).run(commit)
+            save_analyst_context(context)
+            print("Engineering Analyst output cached.")
+        else:
+            print("Using cached Engineering Analyst output.")
     except (ValueError, RuntimeError, GitHubApiError) as error:
         print(f"Engineering Analyst test failed: {error}", file=sys.stderr)
         return 1

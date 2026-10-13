@@ -1,3 +1,4 @@
 google-genai
 langgraph
 pydantic>=2
+python-dotenv

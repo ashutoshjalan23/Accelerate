@@ -58,6 +58,7 @@ class CodeContext(BaseModel):
     after_code: dict[str, str] = Field(default_factory=dict)
     issue_explanation: str
     requirements: list[str] = Field(default_factory=list)
+    relevant_files: list[str] = Field(default_factory=list)
     missing_context: list[str] = Field(
         default_factory=list,
         description="Repository-relative file paths needed for another analysis pass.",
@@ -71,6 +72,7 @@ class GeneratedProblem(BaseModel):
     description: str
     constraints: list[str] = Field(default_factory=list)
     starting_code: str = ""
+    starter_files: dict[str, str] = Field(default_factory=dict)
     examples: list[dict[str, str]] = Field(default_factory=list)
     hidden_test_cases: list[dict[str, str]] = Field(default_factory=list)
     reference_solution: str | None = None
