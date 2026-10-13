@@ -1,12 +1,12 @@
 Accelerate: Agent Architecture & Workflow Spec
 
-Note to AI Developer: This document outlines the agentic backend for the "Accelerate" platform. Your task is to implement this using FastAPI, CrewAI, LangGraph, and the Google GenAI SDK (with OpenRouter as fallback).
+Note to AI Developer: This document outlines the agentic backend for the "Accelerate" platform. Your task is to implement this using FastAPI, LangGraph, and the Google GenAI SDK (with OpenRouter as fallback).
 
-The system uses a hybrid orchestration model:
+The system uses LangGraph for orchestration:
 
-CrewAI manages the sequential pipeline and role-based execution.
-
-LangGraph is used inside specific CrewAI tasks/agents (Engineering Analyst and Problem Creator) that require cyclical reasoning, state management, and multi-step validation.
+LangGraph manages the sequential pipeline and the cyclical reasoning,
+state management, and multi-step validation inside the Engineering Analyst
+and Problem Creator workflows.
 
 1. Data Structures (Pydantic Schemas)
 
@@ -28,7 +28,7 @@ ReviewReport: Feedback, score, and the actual open-source solution comparison.
 
 Agent 1: Curator & Scout Agent
 
-Framework: CrewAI
+Framework: LangGraph
 
 Role: Open-Source Repository Scout
 
@@ -44,7 +44,7 @@ Instructions: Retrieve the last 50 commits. Evaluate commit messages and file ch
 
 Agent 2: Engineering Analyst Agent
 
-Framework: CrewAI (Task wrapped around a LangGraph execution).
+Framework: LangGraph
 
 Role: Reverse Engineering Specialist
 
@@ -66,7 +66,7 @@ Output: CodeContext (A clear explanation of the broken state and the raw before-
 
 Agent 3: Problem Creator Agent
 
-Framework: CrewAI (Task wrapped around a LangGraph execution).
+Framework: LangGraph
 
 Role: Technical Interview Architect
 
@@ -88,7 +88,7 @@ Output: GeneratedProblem (Ready to be sent to FastAPI and saved to the SQL DB).
 
 Agent 4: Reviewer & Solutions Agent
 
-Framework: CrewAI (On-demand execution upon user submission).
+Framework: LangGraph
 
 Role: Senior Code Reviewer
 
@@ -100,9 +100,9 @@ Output: ReviewReport.
 
 Instructions: Do not just run unit tests. Analyze the Big-O complexity, style, and approach. Compare the user's approach to how the open-source maintainers actually solved it. Highlight where the maintainers did it better, or praise the user if their solution is more elegant.
 
-3. Workflow Sequence (CrewAI Process)
+3. Workflow Sequence (LangGraph)
 
-Generation Pipeline (Async): User submits URL -> Curator Agent -> Analyst Agent (LangGraph) -> Problem Creator Agent (LangGraph) -> Save GeneratedProblem to SQL -> Return via FastAPI.
+Generation Pipeline (Async): User submits URL -> top-level LangGraph -> Curator Agent -> Analyst Agent -> Problem Creator Agent -> Save GeneratedProblem to SQL -> Return via FastAPI.
 
 Evaluation Pipeline (Sync): User submits code -> Reviewer Agent compares with stored DB context -> Returns ReviewReport via FastAPI.
 

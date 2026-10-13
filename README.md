@@ -26,6 +26,22 @@ The application reads `GITHUB_TOKEN`, `GEMINI_API_KEY`, and the optional
 `OPENROUTER_API_KEY` from `.env`. The `.env` file is ignored by Git and must
 never be committed.
 
+### Optional top-level LangGraph workflow
+
+The direct pipeline remains the default. A top-level LangGraph workflow is
+available as an opt-in orchestration layer around the existing typed agents:
+
+```powershell
+& ".\.venv\Scripts\python.exe" tests\langgraph_generation_test.py pallets/flask
+```
+
+To run only the LangGraph Problem Creator from a cached analyst result:
+
+```powershell
+& ".\.venv\Scripts\python.exe" tests\langgraph_generation_test.py `
+  pallets/flask --cached-sha COMMIT_SHA
+```
+
 **The core loop:**
 
 1. Enter a GitHub repository.
@@ -45,11 +61,13 @@ never be committed.
 
 ## How It Works
 
-Accelerate uses a multi-agent workflow orchestrated by CrewAI, with LangGraph powering the more complex reasoning workflows.
+Accelerate uses LangGraph for top-level orchestration and for the more
+complex reasoning workflows inside the Engineering Analyst and Problem
+Creator agents.
 
 ```mermaid
 flowchart TD
-    A[GitHub Repository URL] --> B[CrewAI Workflow]
+    A[GitHub Repository URL] --> B[Top-level LangGraph Workflow]
     B --> C[Curator + Scout Agent]
     C --> D[Engineering Analyst]
     D --> E[Problem Creator Agent]
@@ -118,16 +136,16 @@ The workflow should use bounded retries and reject challenges that cannot be gro
 
 ## Agent Architecture
 
-Accelerate combines two complementary orchestration tools.
+Accelerate uses LangGraph as its orchestration tool.
 
 | Technology | Responsibility |
 |---|---|
-| CrewAI | Connects the agents and coordinates the overall workflow. |
-| LangGraph | Manages stateful, iterative reasoning inside the Engineering Analyst and Problem Creator agents. |
+| LangGraph | Coordinates the overall workflow and manages stateful, iterative reasoning inside the Engineering Analyst and Problem Creator agents. |
 | Gemini | Primary language model for analysis and generation. |
 | OpenRouter | Fallback model access when the primary provider is unavailable or unsuitable. |
 
-The overall workflow is coordinated by CrewAI, while selected agents use LangGraph to manage their internal state, conditional transitions, and reasoning loops.
+The overall workflow and the selected agents use LangGraph to manage typed
+state, conditional transitions, caching, and bounded reasoning loops.
 
 The goal is not to make every agent autonomous. Each agent has a defined responsibility, structured inputs and outputs, and clear stopping conditions.
 
@@ -160,8 +178,7 @@ System-design challenges may use a structured answer interface instead of a code
 | Layer | Technology |
 |---|---|
 | Language models | Google Gemini, with OpenRouter as fallback |
-| Multi-agent orchestration | CrewAI |
-| Stateful agent workflows | LangGraph |
+| Agent orchestration and stateful workflows | LangGraph |
 | Repository data | GitHub API |
 | Structured outputs and validation | Pydantic |
 | Backend API | FastAPI |
