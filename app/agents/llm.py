@@ -2,12 +2,13 @@
 
 import json
 import os
+import re
 import time
 from collections.abc import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .schemas import CommitAssessment, CommitData
+from .schemas import CodeContext, CommitAssessment, CommitData
 
 
 CURATOR_ASSESSMENT_PROMPT = """\
@@ -61,6 +62,40 @@ Return only valid JSON matching this schema:
 
 Commit evidence:
 {commit}
+"""
+
+ANALYST_PROMPT = """\
+You are the Engineering Analyst Agent for AceProgramming.
+
+Reconstruct the exact engineering problem addressed by this commit from the
+commit metadata, diff, and before/after source. Distinguish facts visible in
+the code from reasonable inferences. Produce a self-contained explanation
+that another engineer could use to create a programming or system-design
+challenge.
+
+Explain:
+1. what was broken or inefficient before the change,
+2. why the old behavior failed or did not meet its requirements,
+3. what behavior the fix establishes,
+4. the requirements and constraints a learner should satisfy, and
+5. any repository paths or evidence still needed to make the explanation
+   reliable.
+
+Only put concrete repository-relative file paths in missing_context. Each
+item must contain only the path, with no explanation, punctuation, or
+additional text. Use an empty list when no extra file is required.
+Return only valid JSON matching this schema:
+{{"issue_explanation": "...", "requirements": ["..."],
+"missing_context": ["..."]}}
+
+Commit:
+{commit}
+
+Before code:
+{before_code}
+
+After code:
+{after_code}
 """
 
 
@@ -130,6 +165,97 @@ class CuratorLLMClient:
             "All configured LLM providers failed: " + "; ".join(errors) + fallback_hint
         )
 
+    def explain_change(
+        self,
+        commit: CommitData,
+        before_code: dict[str, str],
+        after_code: dict[str, str],
+    ) -> CodeContext:
+        """Analyze a commit and its source context with provider fallback."""
+
+        prompt = ANALYST_PROMPT.format(
+            commit=json.dumps(commit.model_dump(mode="json"), indent=2),
+            before_code=json.dumps(before_code, indent=2),
+            after_code=json.dumps(after_code, indent=2),
+        )
+        data = self._generate_json(prompt)
+        try:
+            requirements = data.get("requirements", [])
+            missing_context = data.get("missing_context", [])
+            if not isinstance(requirements, list) or not all(
+                isinstance(item, str) for item in requirements
+            ):
+                raise TypeError("requirements must be a list of strings")
+            if not isinstance(missing_context, list) or not all(
+                isinstance(item, str) for item in missing_context
+            ):
+                raise TypeError("missing_context must be a list of strings")
+            missing_context = [
+                self._normalize_context_path(item) for item in missing_context
+            ]
+            return CodeContext(
+                commit=commit,
+                before_code=before_code,
+                after_code=after_code,
+                issue_explanation=data["issue_explanation"],
+                requirements=requirements,
+                missing_context=missing_context,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("The LLM returned invalid engineering analysis JSON.") from error
+
+    @staticmethod
+    def _normalize_context_path(value: str) -> str:
+        """Extract a repository path when a model adds a short explanation."""
+
+        candidate = value.strip().splitlines()[0].strip()
+        candidate = re.split(r"\s+(?:-|—|:)\s+", candidate, maxsplit=1)[0]
+        candidate = candidate.strip("`'\"")
+        if (
+            not candidate
+            or candidate.startswith(("/", "\\"))
+            or ".." in candidate.split("/")
+            or not re.fullmatch(r"[A-Za-z0-9._/-]+", candidate)
+        ):
+            raise ValueError(
+                f"LLM returned an invalid repository path in missing_context: {value!r}"
+            )
+        return candidate
+
+    def _generate_json(self, prompt: str) -> dict[str, object]:
+        errors: list[str] = []
+        if self.gemini_api_key:
+            try:
+                return self._parse_json(self._generate_with_gemini_with_retry(prompt))
+            except Exception as error:
+                errors.append(f"Gemini: {error}")
+        if self.openrouter_api_key:
+            try:
+                return self._parse_json(self._generate_with_openrouter(prompt))
+            except Exception as error:
+                errors.append(f"OpenRouter: {error}")
+        if not errors:
+            raise RuntimeError(
+                "No LLM provider is configured. Set GEMINI_API_KEY or "
+                "OPENROUTER_API_KEY."
+            )
+        raise RuntimeError("All configured LLM providers failed: " + "; ".join(errors))
+
+    def _generate_with_gemini_with_retry(self, prompt: str) -> str | None:
+        attempts = self.gemini_retries + 1
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                return self._generate_with_gemini(prompt)
+            except Exception as error:
+                last_error = error
+                if attempt == attempts - 1:
+                    break
+                time.sleep(self.retry_delay_seconds * (2**attempt))
+        raise RuntimeError(
+            f"Gemini failed after {attempts} attempts: {last_error}"
+        ) from last_error
+
     def _assess_with_gemini_with_retry(self, prompt: str) -> CommitAssessment:
         attempts = self.gemini_retries + 1
         last_error: Exception | None = None
@@ -144,6 +270,9 @@ class CuratorLLMClient:
         raise RuntimeError(f"Gemini failed after {attempts} attempts: {last_error}") from last_error
 
     def _assess_with_gemini(self, prompt: str) -> CommitAssessment:
+        return self._parse_assessment(self._generate_with_gemini(prompt))
+
+    def _generate_with_gemini(self, prompt: str) -> str | None:
         try:
             from google import genai
         except ImportError as error:
@@ -157,9 +286,12 @@ class CuratorLLMClient:
             contents=prompt,
             config={"response_mime_type": "application/json"},
         )
-        return self._parse_assessment(response.text)
+        return response.text
 
     def _assess_with_openrouter(self, prompt: str) -> CommitAssessment:
+        return self._parse_assessment(self._generate_with_openrouter(prompt))
+
+    def _generate_with_openrouter(self, prompt: str) -> str:
         payload = json.dumps(
             {
                 "model": self.openrouter_model,
@@ -181,7 +313,21 @@ class CuratorLLMClient:
             content = response["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
             raise RuntimeError("OpenRouter returned an invalid completion.") from error
-        return self._parse_assessment(content)
+        if not isinstance(content, str):
+            raise RuntimeError("OpenRouter returned non-text completion content.")
+        return content
+
+    @staticmethod
+    def _parse_json(content: str | None) -> dict[str, object]:
+        if not content:
+            raise RuntimeError("The LLM returned an empty response.")
+        try:
+            data = json.loads(content)
+        except (json.JSONDecodeError, TypeError) as error:
+            raise RuntimeError("The LLM returned invalid JSON.") from error
+        if not isinstance(data, dict):
+            raise RuntimeError("The LLM returned a JSON value instead of an object.")
+        return data
 
     @staticmethod
     def _parse_assessment(content: str | None) -> CommitAssessment:

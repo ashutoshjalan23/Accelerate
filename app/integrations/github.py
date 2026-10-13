@@ -63,9 +63,17 @@ class GitHubClientAdapter:
         if not isinstance(content, str) or encoding != "base64":
             raise GitHubApiError(f"GitHub returned unsupported content for '{path}'.")
         try:
-            return base64.b64decode(content, validate=True).decode("utf-8")
+            # GitHub wraps base64 content across lines in the JSON response.
+            normalized_content = b"".join(content.encode("ascii").split())
+            return base64.b64decode(normalized_content, validate=True).decode("utf-8")
         except (ValueError, UnicodeDecodeError) as error:
             raise GitHubApiError(f"GitHub returned invalid content for '{path}'.") from error
+
+    def get_commit(self, repository: str, sha: str) -> CommitData:
+        """Return detailed evidence for one commit SHA."""
+
+        owner, name = self._parse_repository(repository)
+        return self._get_commit(owner, name, sha)
 
     def _get_commit(self, owner: str, name: str, sha: str) -> CommitData:
         payload = self._request_json(
@@ -121,6 +129,11 @@ class GitHubClientAdapter:
             result.append(
                 ChangedFile(
                     path=file["filename"],
+                    previous_path=(
+                        file.get("previous_filename")
+                        if isinstance(file.get("previous_filename"), str)
+                        else None
+                    ),
                     status=status if status in {
                         "added",
                         "modified",
@@ -156,7 +169,8 @@ class GitHubClientAdapter:
         except HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
             raise GitHubApiError(
-                f"GitHub API request failed with HTTP {error.code}: {detail}"
+                f"GitHub API request failed with HTTP {error.code} for "
+                f"endpoint '{path}': {detail}"
             ) from error
         except URLError as error:
             raise GitHubApiError(f"GitHub API request failed: {error}") from error

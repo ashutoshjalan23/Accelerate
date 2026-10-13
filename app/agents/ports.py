@@ -18,6 +18,9 @@ class GitHubClient(Protocol):
     def list_commits(self, repository: str, limit: int = 50) -> Sequence[CommitData]:
         ...
 
+    def get_commit(self, repository: str, sha: str) -> CommitData:
+        ...
+
     def get_file(self, repository: str, path: str, ref: str) -> str:
         ...
 

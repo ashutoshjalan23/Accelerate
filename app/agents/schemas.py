@@ -15,6 +15,7 @@ class ChangedFile(BaseModel):
     """A file changed by a selected commit."""
 
     path: str
+    previous_path: str | None = None
     status: Literal["added", "modified", "removed", "renamed", "copied", "unknown"] = (
         "unknown"
     )
@@ -57,7 +58,10 @@ class CodeContext(BaseModel):
     after_code: dict[str, str] = Field(default_factory=dict)
     issue_explanation: str
     requirements: list[str] = Field(default_factory=list)
-    missing_context: list[str] = Field(default_factory=list)
+    missing_context: list[str] = Field(
+        default_factory=list,
+        description="Repository-relative file paths needed for another analysis pass.",
+    )
 
 
 class GeneratedProblem(BaseModel):
