@@ -2,6 +2,7 @@
 
 from .curator import CuratorScoutAgent
 from .engineering_analyst import EngineeringAnalystAgent
+from .llm import CuratorLLMClient
 from .problem_creator import ProblemCreatorAgent
 from .reviewer import ReviewerSolutionsAgent
 from .schemas import CommitAssessment
@@ -9,6 +10,7 @@ from .schemas import CommitAssessment
 __all__ = [
     "CuratorScoutAgent",
     "CommitAssessment",
+    "CuratorLLMClient",
     "EngineeringAnalystAgent",
     "ProblemCreatorAgent",
     "ReviewerSolutionsAgent",
