@@ -42,6 +42,13 @@ class CommitAssessment(BaseModel):
     rationale: str
 
 
+class SelectedCommit(BaseModel):
+    """A commit accepted by the curator and the evidence for that decision."""
+
+    commit: CommitData
+    assessment: CommitAssessment
+
+
 class CodeContext(BaseModel):
     """Before and after code plus the reconstructed engineering context."""
 

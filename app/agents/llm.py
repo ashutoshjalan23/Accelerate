@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from collections.abc import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -13,21 +14,50 @@ CURATOR_ASSESSMENT_PROMPT = """\
 You are the Curator and Scout Agent for AceProgramming.
 
 Decide whether the supplied open-source commit can be transformed into a
-self-contained programming or system-design problem for learners.
+self-contained programming or system-design problem that a learner can
+actually solve and an evaluator can assess.
 
 Read the commit message, pull request description, changed files, and diff.
-Accept a commit only when it contains a distinct engineering problem such as
-a bug fix, algorithmic improvement, performance optimization, concurrency
-correction, or architectural change. The resulting challenge must be
-grounded in the evidence and solvable without access to the original
-repository or undocumented external context.
+Accept a commit only when you can describe a concrete learner task with:
+1. a specific problem or failure mode,
+2. observable expected behavior or explicit system-design requirements,
+3. a meaningful implementation or design decision for the learner, and
+4. an objective way to evaluate the result.
+
+The task may be an executable programming problem (for example, correcting
+runtime behavior, implementing an algorithm, or improving concurrency or
+performance) or a system-design problem (for example, defining an API,
+data model, consistency strategy, or migration plan). It must be grounded in
+the evidence and solvable without access to the original repository or
+undocumented external context.
 
 Reject commits that are merely documentation, formatting, typo, dependency,
-release, or routine maintenance changes; changes whose purpose is ambiguous;
-or changes that require substantial unavailable repository context.
+release, routine maintenance, or configuration-only changes. In particular,
+reject changes that only rename environment variables, update configuration
+names, reorganize settings, or change deployment metadata unless the diff
+also demonstrates a substantial behavioral, reliability, security, or
+performance problem that can independently become a learner challenge.
+Reject changes whose primary substance is dropping support for a language or
+runtime version, changing package metadata, updating CI matrices, changing
+documentation, or removing compatibility code unless the commit contains a
+separate, concrete runtime behavior or system-design problem that a learner
+can implement and that can be evaluated independently of the release or
+support-policy decision.
+Reject vague changes whose commit message and diff do not establish a
+specific problem, expected behavior, meaningful engineering trade-off, and
+evaluation criteria.
+Also reject changes that require substantial unavailable repository context.
+
+Do not infer significance from the number of changed files or the size of the
+diff. Base the decision on the actual evidence. Set suitable to false when
+the evidence is insufficient, and explain the missing evidence in rationale.
+
+Before accepting, mentally write one sentence beginning with "The learner
+must..." and one sentence beginning with "The evaluator can verify...". If
+either sentence cannot be specific and grounded in the commit, reject it.
 
 Return only valid JSON matching this schema:
-{"suitable": boolean, "rationale": " concise evidence-based explanation "}
+{{"suitable": boolean, "rationale": " concise evidence-based explanation "}}
 
 Commit evidence:
 {commit}
@@ -46,10 +76,16 @@ class CuratorLLMClient:
         openrouter_model: str | None = None,
         openrouter_url: str = "https://openrouter.ai/api/v1/chat/completions",
         http_post: Callable[[Request], bytes] | None = None,
+        gemini_retries: int = 2,
+        retry_delay_seconds: float = 2.0,
     ) -> None:
+        if gemini_retries < 0:
+            raise ValueError("gemini_retries must be zero or greater.")
+        if retry_delay_seconds < 0:
+            raise ValueError("retry_delay_seconds must be zero or greater.")
         self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY")
         self.gemini_model = gemini_model or os.getenv(
-            "GEMINI_MODEL", "gemini-2.5-flash"
+            "GEMINI_MODEL", "gemini-3.5-flash"
         )
         self.openrouter_api_key = openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
         self.openrouter_model = openrouter_model or os.getenv(
@@ -57,6 +93,8 @@ class CuratorLLMClient:
         )
         self.openrouter_url = openrouter_url
         self._http_post = http_post or self._default_http_post
+        self.gemini_retries = gemini_retries
+        self.retry_delay_seconds = retry_delay_seconds
 
     def assess_commit(self, commit: CommitData) -> CommitAssessment:
         """Ask the primary provider, then use the configured fallback."""
@@ -68,7 +106,7 @@ class CuratorLLMClient:
 
         if self.gemini_api_key:
             try:
-                return self._assess_with_gemini(prompt)
+                return self._assess_with_gemini_with_retry(prompt)
             except Exception as error:
                 errors.append(f"Gemini: {error}")
 
@@ -83,7 +121,27 @@ class CuratorLLMClient:
                 "No LLM provider is configured. Set GEMINI_API_KEY or "
                 "OPENROUTER_API_KEY."
             )
-        raise RuntimeError("All configured LLM providers failed: " + "; ".join(errors))
+        fallback_hint = ""
+        if self.gemini_api_key and not self.openrouter_api_key:
+            fallback_hint = (
+                " Configure OPENROUTER_API_KEY to enable the configured fallback."
+            )
+        raise RuntimeError(
+            "All configured LLM providers failed: " + "; ".join(errors) + fallback_hint
+        )
+
+    def _assess_with_gemini_with_retry(self, prompt: str) -> CommitAssessment:
+        attempts = self.gemini_retries + 1
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                return self._assess_with_gemini(prompt)
+            except Exception as error:
+                last_error = error
+                if attempt == attempts - 1:
+                    break
+                time.sleep(self.retry_delay_seconds * (2**attempt))
+        raise RuntimeError(f"Gemini failed after {attempts} attempts: {last_error}") from last_error
 
     def _assess_with_gemini(self, prompt: str) -> CommitAssessment:
         try:

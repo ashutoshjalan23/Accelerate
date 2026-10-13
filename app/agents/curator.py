@@ -1,7 +1,7 @@
 """Curator and scout agent."""
 
 from .ports import EngineeringAnalyst, GitHubClient, LLMClient
-from .schemas import CodeContext, CommitData, RepositoryInput
+from .schemas import CodeContext, CommitData, RepositoryInput, SelectedCommit
 
 
 class CuratorScoutAgent:
@@ -23,6 +23,13 @@ class CuratorScoutAgent:
     def select_commit(self, repository: RepositoryInput) -> CommitData:
         """Return a commit accepted by the LLM as suitable for a problem."""
 
+        return self.select_commit_with_assessment(repository).commit
+
+    def select_commit_with_assessment(
+        self, repository: RepositoryInput
+    ) -> SelectedCommit:
+        """Return an accepted commit together with the LLM's assessment."""
+
         repository_name = self._repository_name(str(repository.github_url))
         commits = self.github.list_commits(repository_name, limit=50)
         candidates = [commit for commit in commits if self._is_meaningful(commit)]
@@ -32,7 +39,7 @@ class CuratorScoutAgent:
         for commit in candidates:
             assessment = self.llm.assess_commit(commit)
             if assessment.suitable:
-                return commit
+                return SelectedCommit(commit=commit, assessment=assessment)
 
         raise ValueError("The LLM found no commit suitable for turning into a problem.")
 
