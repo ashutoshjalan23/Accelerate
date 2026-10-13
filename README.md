@@ -1,16 +1,16 @@
-# AceProgramming
+# Accelerate
 
 **Turn real-world open-source engineering into hands-on programming challenges.**
 
-AceProgramming is an agentic learning platform that transforms meaningful commits from popular open-source repositories into interactive programming and system-design challenges.
+Accelerate is an agentic learning platform that transforms meaningful commits from popular open-source repositories into interactive programming and system-design challenges.
 
-Instead of learning software engineering only through tutorials and predefined exercises, AceProgramming lets you explore how real software evolves. Enter a GitHub repository, and a team of AI agents investigates its commit history, reconstructs the engineering problem behind a change, and turns it into a challenge you can solve yourself.
+Instead of learning software engineering only through tutorials and predefined exercises, Accelerate lets you explore how real software evolves. Enter a GitHub repository, and a team of AI agents investigates its commit history, reconstructs the engineering problem behind a change, and turns it into a challenge you can solve yourself.
 
 ## The Idea
 
 Great engineering lessons are hidden inside open-source repositories: performance bottlenecks, architectural decisions, concurrency problems, scalability challenges, and clever algorithmic improvements.
 
-AceProgramming aims to uncover these lessons and turn them into opportunities to learn by doing.
+Accelerate aims to uncover these lessons and turn them into opportunities to learn by doing.
 
 **The core loop:**
 
@@ -31,7 +31,7 @@ AceProgramming aims to uncover these lessons and turn them into opportunities to
 
 ## How It Works
 
-AceProgramming uses a multi-agent workflow orchestrated by CrewAI, with LangGraph powering the more complex reasoning workflows.
+Accelerate uses a multi-agent workflow orchestrated by CrewAI, with LangGraph powering the more complex reasoning workflows.
 
 ```mermaid
 flowchart TD
@@ -104,7 +104,7 @@ The workflow should use bounded retries and reject challenges that cannot be gro
 
 ## Agent Architecture
 
-AceProgramming combines two complementary orchestration tools.
+Accelerate combines two complementary orchestration tools.
 
 | Technology | Responsibility |
 |---|---|
@@ -119,7 +119,7 @@ The goal is not to make every agent autonomous. Each agent has a defined respons
 
 ## User Interface
 
-AceProgramming will have a minimalist web interface focused on discovering and solving engineering problems.
+Accelerate will have a minimalist web interface focused on discovering and solving engineering problems.
 
 ### Home page
 
@@ -183,8 +183,8 @@ The database will support persistence for generated challenges and related metad
 
 ## The Long-Term Vision
 
-AceProgramming aims to make the world's open-source engineering knowledge more accessible.
+Accelerate aims to make the world's open-source engineering knowledge more accessible.
 
-Every meaningful commit is a potential lesson. By turning those lessons into interactive challenges, AceProgramming can help developers move beyond writing code that works toward understanding why systems are designed the way they are, what constraints shape engineering decisions, and how to solve unfamiliar problems independently.
+Every meaningful commit is a potential lesson. By turning those lessons into interactive challenges, Accelerate can help developers move beyond writing code that works toward understanding why systems are designed the way they are, what constraints shape engineering decisions, and how to solve unfamiliar problems independently.
 
 **Learn from the code that builds the world.**

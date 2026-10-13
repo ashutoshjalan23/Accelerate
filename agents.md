@@ -1,6 +1,6 @@
-AceProgramming: Agent Architecture & Workflow Spec
+Accelerate: Agent Architecture & Workflow Spec
 
-Note to AI Developer: This document outlines the agentic backend for the "AceProgramming" platform. Your task is to implement this using FastAPI, CrewAI, LangGraph, and the Google GenAI SDK (with OpenRouter as fallback).
+Note to AI Developer: This document outlines the agentic backend for the "Accelerate" platform. Your task is to implement this using FastAPI, CrewAI, LangGraph, and the Google GenAI SDK (with OpenRouter as fallback).
 
 The system uses a hybrid orchestration model:
 

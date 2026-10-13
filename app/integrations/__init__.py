@@ -1,4 +1,4 @@
-"""External service integrations for AceProgramming."""
+"""External service integrations for Accelerate."""
 
 from .github import GitHubApiError, GitHubClientAdapter
 

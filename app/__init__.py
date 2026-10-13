@@ -1,1 +1,1 @@
-"""AceProgramming application package."""
+"""Accelerate application package."""

@@ -12,7 +12,7 @@ from .schemas import CodeContext, CommitAssessment, CommitData
 
 
 CURATOR_ASSESSMENT_PROMPT = """\
-You are the Curator and Scout Agent for AceProgramming.
+You are the Curator and Scout Agent for Accelerate.
 
 Decide whether the supplied open-source commit can be transformed into a
 self-contained programming or system-design problem that a learner can
@@ -65,7 +65,7 @@ Commit evidence:
 """
 
 ANALYST_PROMPT = """\
-You are the Engineering Analyst Agent for AceProgramming.
+You are the Engineering Analyst Agent for Accelerate.
 
 Reconstruct the exact engineering problem addressed by this commit from the
 commit metadata, diff, and before/after source. Distinguish facts visible in

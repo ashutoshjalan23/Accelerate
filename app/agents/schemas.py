@@ -1,4 +1,4 @@
-"""Typed contracts shared by the AceProgramming agents."""
+"""Typed contracts shared by the Accelerate agents."""
 
 from typing import Literal
 

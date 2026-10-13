@@ -1,4 +1,4 @@
-"""Agent implementations for the AceProgramming generation and review workflows."""
+"""Agent implementations for the Accelerate generation and review workflows."""
 
 from .curator import CuratorScoutAgent
 from .engineering_analyst import EngineeringAnalystAgent
