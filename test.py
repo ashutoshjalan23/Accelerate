@@ -34,11 +34,6 @@ def main() -> int:
         help="GitHub repository URL or owner/name (default: pallets/flask)",
     )
     parser.add_argument(
-        "--show-starter-code",
-        action="store_true",
-        help="Print the exact before-state code given to the generated problem.",
-    )
-    parser.add_argument(
         "--cached-sha",
         help=(
             "Skip Curator and Engineering Analyst, then run Problem Creator "
@@ -118,18 +113,13 @@ def main() -> int:
             print("\nConstraints:")
             for constraint in problem.constraints:
                 print(f"  - {constraint}")
-        if problem.examples:
-            print("\nExamples:")
-            for index, example in enumerate(problem.examples, start=1):
-                print(f"  Example {index}:")
-                print(f"    Input:  {example.get('input', '')}")
-                print(f"    Output: {example.get('output', '')}")
-
-        print("\nLearner starter workspace:")
-        for path, contents in problem.starter_files.items():
-            print(f"  - {path} ({len(contents)} characters, before-commit state)")
-            if args.show_starter_code:
-                print("    " + "\n    ".join(contents.splitlines()))
+        from app.local_challenge import workspace
+        checkout = workspace(selected, problem)
+        print("\nLocal checkout commands:")
+        print("\n".join(checkout["checkout_commands"]))
+        print("\nRelevant files:")
+        for path in problem.relevant_files:
+            print(f"  - {path}")
 
         print("\nPipeline completed successfully.")
         return 0

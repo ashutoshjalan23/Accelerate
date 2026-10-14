@@ -42,3 +42,17 @@ def save_analyst_context(context: CodeContext) -> None:
         encoding="utf-8",
     )
     temporary_path.replace(path)
+
+
+def find_analyst_context(repository: str) -> CodeContext | None:
+    """Reuse an existing repository context before scouting or paying for analysis."""
+    paths = sorted((Path(".cache") / "analyst").glob("*.json"),
+                   key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in paths:
+        try:
+            context = CodeContext.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if context.commit.repository.lower() == repository.lower() and not context.missing_context:
+            return context
+    return None

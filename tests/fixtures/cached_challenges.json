@@ -1,0 +1,101 @@
+[
+  {
+    "problem": {
+      "title": "Implement HTTP QUERY Method Route Decorator",
+      "description": "Flask offers shortcut decorators for common HTTP methods, but applications cannot register HTTP QUERY routes using the same decorator interface. Add support for QUERY routing that behaves consistently for applications and blueprints, and add regression coverage. Preserve existing routing behavior.",
+      "acceptance_criteria": [
+        "Applications and blueprints can register QUERY routes through a shortcut decorator.",
+        "Requests using QUERY reach the registered handler.",
+        "Existing method decorators and registration options keep their behavior.",
+        "Regression tests cover the new behavior."
+      ],
+      "constraints": [],
+      "relevant_files": [
+        "src/flask/sansio/scaffold.py",
+        "tests/test_basic.py"
+      ],
+      "setup_notes": [
+        "Follow the README and contribution instructions at the checked-out revision. Environment setup has not been verified by Accelerate."
+      ],
+      "verification_notes": [
+        "Run the relevant repository tests or build checks locally and add regression coverage for the failure. No hosted grading is performed."
+      ],
+      "source_commit_sha": "d8eaaba824655046958d1a97f11780de460c3271"
+    },
+    "commit": {
+      "repository": "pallets/flask",
+      "commit_sha": "d8eaaba824655046958d1a97f11780de460c3271",
+      "parent_sha": "3596b1ab61cea85edb8970e83ff61daa073facf8",
+      "message": "add `app.query` route decorator (#6133)",
+      "diff": "diff -- CHANGES.rst\n@@ -29,6 +29,7 @@ Unreleased\n -   ``Flask.select_jinja_autoescape`` uses case-insensitive comparison instead\n     of only lower case file extensions. :pr:`6012`\n -   Fix parsing IPv6 with port in ``run`` and the test client. :pr:`6096`\n+-   Add ``app.query`` route decorator for the HTTP QUERY method.\n \n \n Version 3.1.3\n\ndiff -- src/flask/sansio/scaffold.py\n@@ -300,6 +300,14 @@ def get(self, rule: str, **options: t.Any) -> t.Callable[[T_route], T_route]:\n         \"\"\"\n         return self._method_route(\"GET\", rule, options)\n \n+    @setupmethod\n+    def query(self, rule: str, **options: t.Any) -> t.Callable[[T_route], T_route]:\n+        \"\"\"Shortcut for :meth:`route` with ``methods=[\"QUERY\"]``.\n+\n+        .. versionadded:: 3.2\n+        \"\"\"\n+        return self._method_route(\"QUERY\", rule, options)\n+\n     @setupmethod\n     def post(self, rule: str, **options: t.Any) -> t.Callable[[T_route], T_route]:\n         \"\"\"Shortcut for :meth:`route` with ``methods=[\"POST\"]``.\n\ndiff -- tests/test_basic.py\n@@ -7,6 +7,7 @@\n from contextlib import nullcontext\n from datetime import datetime\n from datetime import timezone\n+from functools import partial\n from platform import python_implementation\n \n import pytest\n@@ -52,10 +53,12 @@ def index_put():\n     assert sorted(rv.allow) == [\"GET\", \"HEAD\", \"OPTIONS\", \"POST\", \"PUT\"]\n \n \n-@pytest.mark.parametrize(\"method\", [\"get\", \"post\", \"put\", \"delete\", \"patch\"])\n+@pytest.mark.parametrize(\"method\", [\"get\", \"query\", \"post\", \"put\", \"delete\", \"patch\"])\n def test_method_route(app, client, method):\n     method_route = getattr(app, method)\n-    client_method = getattr(client, method)\n+    client_method = getattr(\n+        client, method, partial(client.open, method=method.capitalize())\n+    )\n \n     @method_route(\"/\")\n     def hello():",
+      "files_changed": [
+        {
+          "path": "CHANGES.rst",
+          "previous_path": null,
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -29,6 +29,7 @@ Unreleased\n -   ``Flask.select_jinja_autoescape`` uses case-insensitive comparison instead\n     of only lower case file extensions. :pr:`6012`\n -   Fix parsing IPv6 with port in ``run`` and the test client. :pr:`6096`\n+-   Add ``app.query`` route decorator for the HTTP QUERY method.\n \n \n Version 3.1.3"
+        },
+        {
+          "path": "src/flask/sansio/scaffold.py",
+          "previous_path": null,
+          "status": "modified",
+          "additions": 8,
+          "deletions": 0,
+          "patch": "@@ -300,6 +300,14 @@ def get(self, rule: str, **options: t.Any) -> t.Callable[[T_route], T_route]:\n         \"\"\"\n         return self._method_route(\"GET\", rule, options)\n \n+    @setupmethod\n+    def query(self, rule: str, **options: t.Any) -> t.Callable[[T_route], T_route]:\n+        \"\"\"Shortcut for :meth:`route` with ``methods=[\"QUERY\"]``.\n+\n+        .. versionadded:: 3.2\n+        \"\"\"\n+        return self._method_route(\"QUERY\", rule, options)\n+\n     @setupmethod\n     def post(self, rule: str, **options: t.Any) -> t.Callable[[T_route], T_route]:\n         \"\"\"Shortcut for :meth:`route` with ``methods=[\"POST\"]``."
+        },
+        {
+          "path": "tests/test_basic.py",
+          "previous_path": null,
+          "status": "modified",
+          "additions": 5,
+          "deletions": 2,
+          "patch": "@@ -7,6 +7,7 @@\n from contextlib import nullcontext\n from datetime import datetime\n from datetime import timezone\n+from functools import partial\n from platform import python_implementation\n \n import pytest\n@@ -52,10 +53,12 @@ def index_put():\n     assert sorted(rv.allow) == [\"GET\", \"HEAD\", \"OPTIONS\", \"POST\", \"PUT\"]\n \n \n-@pytest.mark.parametrize(\"method\", [\"get\", \"post\", \"put\", \"delete\", \"patch\"])\n+@pytest.mark.parametrize(\"method\", [\"get\", \"query\", \"post\", \"put\", \"delete\", \"patch\"])\n def test_method_route(app, client, method):\n     method_route = getattr(app, method)\n-    client_method = getattr(client, method)\n+    client_method = getattr(\n+        client, method, partial(client.open, method=method.capitalize())\n+    )\n \n     @method_route(\"/\")\n     def hello():"
+        }
+      ],
+      "pull_request_description": "[RFC 10008](https://datatracker.ietf.org/doc/html/rfc10008) isn't accepted yet, but it's been kicking around for years and looks like it will pass. I'm adding it now so I don't have to watch it anymore.\r\n\r\nAdded `client.query` method in https://github.com/pallets/werkzeug/pull/3219. Adjusted the test here to account for Werkzeug not being released yet.\r\n\r\ncloses #3193 "
+    }
+  },
+  {
+    "problem": {
+      "title": "Fix Cross-Compilation Executable Extension Handling",
+      "description": "Cross-compiling the xxHash command-line tool for Windows can leave broken symbolic links to cached executables. The compiler may produce a filename ending in .exe while the build rules expect a different name. Correct the build behavior so the executable and its symlinks agree, and ensure cleanup removes the produced artifacts. Preserve builds for targets without an executable extension.",
+      "acceptance_criteria": [
+        "Cached executable names and symlink targets agree for Windows cross-compilation.",
+        "Targets without an executable extension continue to build correctly.",
+        "Cleanup removes generated executables including Windows artifacts.",
+        "Explain how you checked both extension and non-extension behavior."
+      ],
+      "constraints": [],
+      "relevant_files": [
+        "build/make/multiconf.make"
+      ],
+      "setup_notes": [
+        "Follow the README and contribution instructions at the checked-out revision. Environment setup has not been verified by Accelerate."
+      ],
+      "verification_notes": [
+        "Run the relevant repository tests or build checks locally and add regression coverage for the failure. No hosted grading is performed."
+      ],
+      "source_commit_sha": "3a5da2b81c7c9b4b1f3781a0a359786a265abe84"
+    },
+    "commit": {
+      "repository": "Cyan4973/xxHash",
+      "commit_sha": "3a5da2b81c7c9b4b1f3781a0a359786a265abe84",
+      "parent_sha": "2c082ca6fc7fd63c0fc018cb0b31a573e8d095ef",
+      "message": "multiconf: fix broken program symlink when cross-compiling with mingw\n\nA Windows compiler appends .exe to its output when the name lacks it, so the cached binary was xxhsum.exe while the symlink targeted xxhsum. Include $(EXT) in the cached binary name. Also make clean remove the .exe links regardless of OS.\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>",
+      "diff": "diff -- build/make/multiconf.make\n@@ -252,17 +252,19 @@ define program_base  # progName, objectDeps, extraDeps, postLinkCmds, extraHash,\n $$(if $$(filter 2,$$(V)),$$(info $$(call $(0),$(1),$(2),$(3),$(4),$(5),$(6),$(7))))\n MCM_ALL_BINS += $(1)\n \n-$$(CACHE_ROOT)/%/$(1) : $$(addprefix $$(CACHE_ROOT)/%/,$(2)) $(3)\n+$$(CACHE_ROOT)/%/$(1)$(EXT) : $$(addprefix $$(CACHE_ROOT)/%/,$(2)) $(3)\n \t@echo LD $$@\n \t$$($(6)) $$(CPPFLAGS) $$($(7)) $$^ -o $$@ $$(LDFLAGS) $$(LDLIBS)\n \t$(4)\n \n .PHONY: $(1)\n-$(1) : $$(CACHE_ROOT)/$$(call HASH_FUNC,$(1),$$($(6)) $$(CPPFLAGS) $$($(7)) $$(LDFLAGS) $$(LDLIBS) $(5))/$(1)\n+$(1) : $$(CACHE_ROOT)/$$(call HASH_FUNC,$(1),$$($(6)) $$(CPPFLAGS) $$($(7)) $$(LDFLAGS) $$(LDLIBS) $(5))/$(1)$(EXT)\n \t$$(LN) -sf $$< $$@$(EXT)\n \n endef # program_base\n-# Note: $(EXT) must be set to .exe for Windows\n+# Note: $(EXT) must be set to .exe for Windows.\n+# It is part of the cached binary name, because a Windows compiler\n+# (such as mingw) appends .exe to its output when the name lacks it.\n \n define c_program  # progName, objectDeps, extraDeps, postLinkCmds\n $$(eval $$(call program_base,$(1),$(2),$(3),$(4),$(1)$(2),CC,CFLAGS))\n@@ -286,7 +288,7 @@ endef # cxx_program_shared_o\n .PHONY: clean_cache\n clean_cache:\n \t$(RM) -rf $(CACHE_ROOT)\n-\t$(RM) $(MCM_ALL_BINS)\n+\t$(RM) $(MCM_ALL_BINS) $(addsuffix .exe,$(MCM_ALL_BINS))\n \n # automatically attach to standard clean target\n .PHONY: clean",
+      "files_changed": [
+        {
+          "path": "build/make/multiconf.make",
+          "previous_path": null,
+          "status": "modified",
+          "additions": 6,
+          "deletions": 4,
+          "patch": "@@ -252,17 +252,19 @@ define program_base  # progName, objectDeps, extraDeps, postLinkCmds, extraHash,\n $$(if $$(filter 2,$$(V)),$$(info $$(call $(0),$(1),$(2),$(3),$(4),$(5),$(6),$(7))))\n MCM_ALL_BINS += $(1)\n \n-$$(CACHE_ROOT)/%/$(1) : $$(addprefix $$(CACHE_ROOT)/%/,$(2)) $(3)\n+$$(CACHE_ROOT)/%/$(1)$(EXT) : $$(addprefix $$(CACHE_ROOT)/%/,$(2)) $(3)\n \t@echo LD $$@\n \t$$($(6)) $$(CPPFLAGS) $$($(7)) $$^ -o $$@ $$(LDFLAGS) $$(LDLIBS)\n \t$(4)\n \n .PHONY: $(1)\n-$(1) : $$(CACHE_ROOT)/$$(call HASH_FUNC,$(1),$$($(6)) $$(CPPFLAGS) $$($(7)) $$(LDFLAGS) $$(LDLIBS) $(5))/$(1)\n+$(1) : $$(CACHE_ROOT)/$$(call HASH_FUNC,$(1),$$($(6)) $$(CPPFLAGS) $$($(7)) $$(LDFLAGS) $$(LDLIBS) $(5))/$(1)$(EXT)\n \t$$(LN) -sf $$< $$@$(EXT)\n \n endef # program_base\n-# Note: $(EXT) must be set to .exe for Windows\n+# Note: $(EXT) must be set to .exe for Windows.\n+# It is part of the cached binary name, because a Windows compiler\n+# (such as mingw) appends .exe to its output when the name lacks it.\n \n define c_program  # progName, objectDeps, extraDeps, postLinkCmds\n $$(eval $$(call program_base,$(1),$(2),$(3),$(4),$(1)$(2),CC,CFLAGS))\n@@ -286,7 +288,7 @@ endef # cxx_program_shared_o\n .PHONY: clean_cache\n clean_cache:\n \t$(RM) -rf $(CACHE_ROOT)\n-\t$(RM) $(MCM_ALL_BINS)\n+\t$(RM) $(MCM_ALL_BINS) $(addsuffix .exe,$(MCM_ALL_BINS))\n \n # automatically attach to standard clean target\n .PHONY: clean"
+        }
+      ],
+      "pull_request_description": null
+    }
+  }
+]
