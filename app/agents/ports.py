@@ -8,7 +8,6 @@ from .schemas import (
     CommitAssessment,
     CommitData,
     GeneratedProblem,
-    ReviewReport,
 )
 
 
@@ -43,15 +42,6 @@ class LLMClient(Protocol):
         self, problem: GeneratedProblem, context: CodeContext
     ) -> tuple[bool, str]:
         ...
-
-    def review_submission(
-        self,
-        submission: object,
-        problem: GeneratedProblem,
-        commit: CommitData,
-    ) -> ReviewReport:
-        ...
-
 
 class EngineeringAnalyst(Protocol):
     """The analyst operation required by the curator."""

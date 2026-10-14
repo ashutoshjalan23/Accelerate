@@ -39,13 +39,13 @@ class ProblemCreatorAgent:
         )
         problem = state["problem"]
         if problem is None:
-            raise ValueError("Problem creation completed without a generated problem.")
+            raise ValueError("Problem creation failed: " + state["validation_reason"])
         if not state["validation_passed"]:
             raise ValueError(
                 "Generated problem did not pass self-validation: "
                 + state["validation_reason"]
             )
-        return self._materialize_starter_files(problem, context)
+        return problem
 
     def _build_graph(self):
         try:
@@ -80,16 +80,18 @@ class ProblemCreatorAgent:
                     )
                 }
             )
-        return {
-            **state,
-            "problem": self.llm.draft_problem(context),
-            "iterations": iteration,
-        }
+        try:
+            problem = self.llm.draft_problem(context)
+            problem = self._ground_problem(problem, state["context"])
+            return {**state, "problem": problem, "iterations": iteration}
+        except (RuntimeError, ValueError) as error:
+            return {**state, "problem": None, "iterations": iteration,
+                    "validation_reason": str(error), "validation_passed": False}
 
     def _validate(self, state: ProblemCreatorState) -> ProblemCreatorState:
         problem = state["problem"]
         if problem is None:
-            raise ValueError("Problem validation received no generated problem.")
+            return state
         logger.info("Problem Creator validating draft %d.", state["iterations"])
         valid, reason = self.llm.validate_problem(problem, state["context"])
         logger.info(
@@ -111,31 +113,26 @@ class ProblemCreatorAgent:
         return "draft"
 
     @staticmethod
-    def _materialize_starter_files(
+    def _ground_problem(
         problem: GeneratedProblem, context: CodeContext
     ) -> GeneratedProblem:
-        allowed = set(context.relevant_files or context.before_code)
-        requested = problem.starter_files or {
-            path: context.before_code[path]
-            for path in allowed
-            if path in context.before_code
-        }
+        if problem.source_commit_sha != context.commit.commit_sha:
+            raise ValueError("Challenge source SHA does not match the evidence.")
+        allowed = set(context.before_code) | set(context.after_code)
+        requested = problem.relevant_files or context.relevant_files or sorted(allowed)
         invalid = set(requested) - allowed
         if invalid:
             raise ValueError(
-                "Generated problem requested files not identified as relevant: "
+                "Generated problem requested files absent from repository evidence: "
                 + ", ".join(sorted(invalid))
             )
-        starter_files = {
-            path: context.before_code[path]
-            for path in requested
-            if path in context.before_code
-        }
-        if not starter_files:
-            raise ValueError("Generated problem has no valid starter files.")
-        starting_code = problem.starting_code or "\n\n".join(
-            f"# {path}\n{contents}" for path, contents in starter_files.items()
-        )
+        if not requested or not problem.acceptance_criteria:
+            raise ValueError("Challenge requires relevant paths and acceptance criteria.")
         return problem.model_copy(
-            update={"starter_files": starter_files, "starting_code": starting_code}
+            update={"relevant_files": sorted(set(requested)),
+                    "setup_notes": problem.setup_notes or [
+                        "Follow the README and contribution guide at the starting revision. "
+                        "Environment setup has not been verified by Accelerate."],
+                    "verification_notes": problem.verification_notes or [
+                        "Run the relevant repository tests or build checks locally and add regression coverage."]}
         )

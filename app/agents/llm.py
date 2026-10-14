@@ -9,7 +9,12 @@ from collections.abc import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .schemas import CodeContext, CommitAssessment, CommitData, GeneratedProblem
+from .schemas import (
+    CodeContext,
+    CommitAssessment,
+    CommitData,
+    GeneratedProblem,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +23,7 @@ CURATOR_ASSESSMENT_PROMPT = """\
 You are the Curator and Scout Agent for Accelerate.
 
 Decide whether the supplied open-source commit can be transformed into a
-self-contained programming or system-design problem that a learner can
+focused local-repository engineering challenge that a learner can
 actually solve and an evaluator can assess.
 
 Read the commit message, pull request description, changed files, and diff.
@@ -32,8 +37,8 @@ The task may be an executable programming problem (for example, correcting
 runtime behavior, implementing an algorithm, or improving concurrency or
 performance) or a system-design problem (for example, defining an API,
 data model, consistency strategy, or migration plan). It must be grounded in
-the evidence and solvable without access to the original repository or
-undocumented external context.
+the evidence and solvable with access to the repository at its parent commit. The learner
+uses their local development environment; do not require an isolated exercise.
 
 Reject commits that are merely documentation, formatting, typo, dependency,
 release, routine maintenance, or configuration-only changes. In particular,
@@ -104,44 +109,35 @@ After code:
 """
 
 PROBLEM_DRAFT_PROMPT = """\
-You are the Problem Creator Agent for Accelerate.
-
-Turn the engineering analysis into a self-contained programming or
-system-design challenge. The learner must solve the underlying problem, not
-reproduce the maintainer's patch. Use only the supplied repository evidence.
-
-Write a clear title and description, functional requirements, constraints,
-examples, and hidden test cases. Do not reproduce source code in your
-response: starter files are materialized from the supplied before-state by
-the application after generation.
-Do not invent repository files or APIs. Do not reveal the reference solution
-in the learner-facing description.
-
-Return only valid JSON matching this schema:
+You are the Challenge Creator for Accelerate, a local-repository learning platform.
+The learner checks out the parent commit and works in the full original repository.
+Create a focused issue statement in plain paragraphs describing the failure and
+expected behavior. Include acceptance criteria and exact relevant file paths.
+Allow alternative implementations; do not prescribe or reveal the maintainer patch.
+Do not create starter code, hidden tests, reference solutions, or Git commands.
+Only suggest setup or test commands explicitly supported by supplied evidence.
+When setup evidence is unavailable, direct the learner to the checked-out README
+and contribution guide and clearly say that setup has not been verified.
+Return only valid JSON:
 {{"title": "...", "description": "...", "constraints": ["..."],
-"starting_code": "", "starter_files": {{}},
-"examples": [{{"input": "...", "output": "..."}}],
-"hidden_test_cases": [{{"input": "...", "output": "..."}}],
-"reference_solution": "...", "source_commit_sha": "..."}}
-
+"acceptance_criteria": ["observable requirement"],
+"relevant_files": ["exact/path"], "setup_notes": ["..."],
+"verification_notes": ["..."], "source_commit_sha": "..."}}
 Engineering context:
 {context}
 """
 
 PROBLEM_VALIDATION_PROMPT = """\
-You are the quality gate for an Accelerate challenge.
-
-Check whether this generated challenge is self-contained, grounded in the
-source context, solvable by a learner, and objectively evaluable. Reject it
-if it relies on undocumented repository knowledge, leaks the reference
-solution, has inconsistent examples or tests, or lacks a concrete task.
-
+Check this local-repository challenge against its source evidence. Learners have
+access to the full repository at the parent SHA, so importing repository modules
+is expected. Verify a concrete task, observable acceptance criteria, relevant
+paths and honest setup/verification notes. Reject invented commands, unsupported
+requirements, solution leakage, and instructions prescribing the original patch.
+Do not require synthetic input/output tests or a standalone Python function.
 Return only valid JSON:
 {{"valid": true, "reason": "brief evidence-based explanation"}}
-
 Source context:
 {context}
-
 Generated challenge:
 {problem}
 """

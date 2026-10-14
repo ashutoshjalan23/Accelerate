@@ -13,7 +13,7 @@ from ..agents.schemas import (
     GeneratedProblem,
     RepositoryInput,
 )
-from ..cache import load_analyst_context, save_analyst_context
+from ..cache import find_analyst_context, load_analyst_context, save_analyst_context
 from ..integrations.github import GitHubClientAdapter
 
 
@@ -103,10 +103,16 @@ class LangGraphGenerationWorkflow:
         return graph.compile()
 
     def _select_commit(self, state: GenerationState) -> GenerationState:
+        if state["use_cache"]:
+            context = find_analyst_context(state["repository"].repository)
+            if context:
+                return {**state, "selected_commit": context.commit, "context": context}
         selected = self.curator.select_commit_with_assessment(state["repository"])
         return {**state, "selected_commit": selected.commit}
 
     def _load_context(self, state: GenerationState) -> GenerationState:
+        if state["context"] is not None:
+            return state
         commit = state["selected_commit"]
         if commit is None:
             raise ValueError("Analyst context requested before commit selection.")

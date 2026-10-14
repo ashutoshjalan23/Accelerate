@@ -2,13 +2,34 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
+from urllib.parse import urlparse
+import re
 
 
 class RepositoryInput(BaseModel):
     """Input supplied to the repository scouting workflow."""
 
     github_url: HttpUrl
+
+    @field_validator("github_url", mode="before")
+    @classmethod
+    def normalize_repository(cls, value):
+        raw = str(value).strip()
+        if "://" not in raw:
+            raw = "https://github.com/" + raw
+        parsed = urlparse(raw)
+        path = parsed.path.strip("/").removesuffix(".git")
+        if (parsed.scheme != "https" or parsed.netloc.lower() != "github.com"
+                or parsed.params or parsed.query or parsed.fragment
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", path)
+                or any(part.startswith(".") for part in path.split("/"))):
+            raise ValueError("Use a GitHub repository URL or owner/repository.")
+        return f"https://github.com/{path}"
+
+    @property
+    def repository(self) -> str:
+        return self.github_url.path.strip("/")
 
 
 class ChangedFile(BaseModel):
@@ -66,33 +87,13 @@ class CodeContext(BaseModel):
 
 
 class GeneratedProblem(BaseModel):
-    """A self-contained challenge generated from repository evidence."""
+    """A local-repository task. Source solution evidence stays server-side."""
 
-    title: str
-    description: str
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
     constraints: list[str] = Field(default_factory=list)
-    starting_code: str = ""
-    starter_files: dict[str, str] = Field(default_factory=dict)
-    examples: list[dict[str, str]] = Field(default_factory=list)
-    hidden_test_cases: list[dict[str, str]] = Field(default_factory=list)
-    reference_solution: str | None = None
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    relevant_files: list[str] = Field(default_factory=list)
+    setup_notes: list[str] = Field(default_factory=list)
+    verification_notes: list[str] = Field(default_factory=list)
     source_commit_sha: str
-
-
-class UserSubmission(BaseModel):
-    """A learner's submitted solution."""
-
-    problem_id: str
-    code: str
-    language: str = "python"
-
-
-class ReviewReport(BaseModel):
-    """Structured feedback for a learner submission."""
-
-    feedback: str
-    score: float = Field(ge=0, le=100)
-    complexity_analysis: str
-    style_analysis: str
-    solution_comparison: str
-    passed_tests: bool | None = None

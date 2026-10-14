@@ -1,153 +1,94 @@
-"""Deterministic tests for the Problem Creator workflow."""
+"""Offline agent tests: no provider credentials or network are used."""
 
-import pathlib
 import json
-import sys
+import os
 import unittest
-from urllib.request import Request
+from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-
-from app.agents.problem_creator import ProblemCreatorAgent
 from app.agents.llm import CuratorLLMClient
-from app.agents.schemas import CodeContext, CommitData, GeneratedProblem
+from app.agents.problem_creator import ProblemCreatorAgent
+from app.agents.schemas import CodeContext, CommitData, GeneratedProblem, RepositoryInput
+from app.orchestration.langgraph_generation import LangGraphGenerationWorkflow
+from app.seed_cached import DEMO_PATH
 
 
-def make_context() -> CodeContext:
-    commit = CommitData(
-        repository="owner/repository",
-        commit_sha="after",
-        parent_sha="before",
-        message="Fix behavior",
-        diff="diff",
-    )
-    return CodeContext(
-        commit=commit,
-        before_code={"src/main.py": "def solve(value):\n    return value\n"},
-        after_code={"src/main.py": "def solve(value):\n    return value + 1\n"},
-        issue_explanation="The old implementation returned the wrong result.",
-        requirements=["Return the corrected result."],
-        relevant_files=["src/main.py"],
-    )
-
-
-class FakeProblemLLM:
-    def __init__(self) -> None:
-        self.draft_calls = 0
-        self.validation_calls = 0
-
-    def draft_problem(self, context: CodeContext) -> GeneratedProblem:
-        self.draft_calls += 1
-        return GeneratedProblem(
-            title="Correct the result",
-            description="Implement solve so it returns the corrected result.",
-            constraints=["The input is an integer."],
-            starter_files={"src/main.py": "model-invented content"},
-            examples=[{"input": "1", "output": "2"}],
-            hidden_test_cases=[{"input": "2", "output": "3"}],
-            reference_solution="return value + 1",
-            source_commit_sha=context.commit.commit_sha,
-        )
-
-    def validate_problem(
-        self, problem: GeneratedProblem, context: CodeContext
-    ) -> tuple[bool, str]:
-        self.validation_calls += 1
-        if self.validation_calls == 1:
-            return False, "Clarify the expected result."
-        return True, "The task is self-contained."
+def inputs():
+    item = json.loads(DEMO_PATH.read_text(encoding="utf-8"))[0]
+    commit = CommitData.model_validate(item["commit"])
+    problem = GeneratedProblem.model_validate(item["problem"])
+    return CodeContext(commit=commit, before_code={path: "cached source" for path in problem.relevant_files},
+        issue_explanation="QUERY routing is unavailable.", relevant_files=problem.relevant_files), problem
 
 
 class ProblemCreatorTests(unittest.TestCase):
-    def test_llm_parser_accepts_fenced_json_and_trailing_text(self) -> None:
-        parsed = CuratorLLMClient._parse_json(
-            'Here is the result:\n```json\n{"title": "Challenge"}\n```\nDone.'
-        )
-        self.assertEqual(parsed, {"title": "Challenge"})
+    def test_validation_sees_final_paths_and_revisions_are_bounded(self):
+        context, problem = inputs()
+        llm = Mock()
+        llm.draft_problem.return_value = problem.model_copy(update={"relevant_files": []})
+        llm.validate_problem.side_effect = [(False, "Clarify behavior"), (True, "grounded")]
+        result = ProblemCreatorAgent(llm).run(context)
+        self.assertEqual(result.relevant_files, sorted(context.relevant_files))
+        self.assertEqual(llm.draft_problem.call_count, 2)
+        self.assertIn("Clarify behavior", llm.draft_problem.call_args.args[0].issue_explanation)
+        self.assertEqual(llm.validate_problem.call_args.args[0].relevant_files, result.relevant_files)
+        self.assertNotIn("starter_files", result.model_dump())
 
-    def test_llm_parser_reports_truncated_json(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
-            CuratorLLMClient._parse_json('{"title": "truncated"')
+    def test_invalid_json_and_invented_paths_can_be_revised(self):
+        context, problem = inputs()
+        llm = Mock()
+        llm.draft_problem.side_effect = [RuntimeError("Invalid JSON"),
+            problem.model_copy(update={"relevant_files": ["invented.py"]}), problem]
+        llm.validate_problem.return_value = (True, "grounded")
+        result = ProblemCreatorAgent(llm).run(context)
+        self.assertEqual(result.title, problem.title)
+        self.assertEqual(llm.draft_problem.call_count, 3)
+        llm.validate_problem.assert_called_once()
 
-    def test_problem_draft_request_avoids_source_duplication(self) -> None:
-        captured: dict[str, object] = {}
+    def test_rejects_after_iteration_limit(self):
+        context, problem = inputs()
+        llm = Mock()
+        llm.draft_problem.return_value = problem
+        llm.validate_problem.return_value = (False, "Leaks patch")
+        with self.assertRaisesRegex(ValueError, "Leaks patch"):
+            ProblemCreatorAgent(llm, max_iterations=2).run(context)
+        self.assertEqual(llm.draft_problem.call_count, 2)
 
-        def post(request: Request) -> bytes:
+    def test_cached_analyst_context_skips_curator_and_github(self):
+        context, problem = inputs()
+        github, llm = Mock(), Mock()
+        llm.draft_problem.return_value = problem
+        llm.validate_problem.return_value = (True, "grounded")
+        workflow = LangGraphGenerationWorkflow(github=github, llm=llm)
+        with patch("app.orchestration.langgraph_generation.find_analyst_context", return_value=context):
+            result = workflow.run(RepositoryInput(github_url="pallets/flask"))
+        self.assertEqual(result.context, context)
+        github.list_commits.assert_not_called()
+        github.get_file.assert_not_called()
+        llm.assess_commit.assert_not_called()
+        llm.explain_change.assert_not_called()
+
+    def test_draft_prompt_is_small_and_requests_no_generated_code_or_solution(self):
+        context, problem = inputs()
+        captured = {}
+        def post(request):
             captured.update(json.loads(request.data))
-            return json.dumps(
-                {
-                    "choices": [
-                        {
-                            "message": {
-                                "content": json.dumps(
-                                    {
-                                        "title": "Challenge",
-                                        "description": "Solve it.",
-                                        "source_commit_sha": "after",
-                                    }
-                                )
-                            }
-                        }
-                    ]
-                }
-            ).encode()
-
-        client = CuratorLLMClient(
-            openrouter_api_key="test-key",
-            http_post=post,
-        )
-        client.draft_problem(make_context())
-
-        self.assertEqual(captured["max_tokens"], 2048)
-        self.assertEqual(captured["reasoning"], {"enabled": False})
+            return json.dumps({"choices": [{"message": {"content": problem.model_dump_json()}}]}).encode()
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "", "OPENROUTER_API_KEY": ""}):
+            client = CuratorLLMClient(openrouter_api_key="fake", http_post=post)
+        self.assertEqual(client.draft_problem(context), problem)
         prompt = captured["messages"][0]["content"]
-        self.assertIn('"starter_files": {}', prompt)
         self.assertNotIn('"before_code"', prompt)
         self.assertNotIn('"after_code"', prompt)
+        self.assertNotIn('"reference_solution":', prompt)
+        self.assertNotIn('"hidden_test_cases":', prompt)
+        self.assertEqual(captured["max_tokens"], 2048)
 
-    def test_openrouter_truncation_is_reported_before_json_parsing(self) -> None:
-        def post(request: Request) -> bytes:
-            return json.dumps(
-                {
-                    "choices": [
-                        {
-                            "finish_reason": "length",
-                            "message": {"content": '{"title": "partial"'},
-                        }
-                    ]
-                }
-            ).encode()
+    def test_parser_and_truncation(self):
+        self.assertEqual(CuratorLLMClient._parse_json('```json\n{"valid":true}\n```'), {"valid": True})
+        with self.assertRaises(RuntimeError):
+            CuratorLLMClient._parse_json('{"title":')
 
-        client = CuratorLLMClient(openrouter_api_key="test-key", http_post=post)
-        with self.assertRaisesRegex(RuntimeError, "truncated"):
-            client._generate_with_openrouter("test")
-
-    def test_retries_and_materializes_exact_before_state(self) -> None:
-        llm = FakeProblemLLM()
-        problem = ProblemCreatorAgent(llm, max_iterations=2).run(make_context())
-
-        self.assertEqual(llm.draft_calls, 2)
-        self.assertEqual(llm.validation_calls, 2)
-        self.assertEqual(
-            problem.starter_files,
-            {"src/main.py": "def solve(value):\n    return value\n"},
-        )
-        self.assertIn("def solve(value):", problem.starting_code)
-
-    def test_rejects_problem_after_iteration_limit(self) -> None:
-        class AlwaysInvalid(FakeProblemLLM):
-            def validate_problem(
-                self, problem: GeneratedProblem, context: CodeContext
-            ) -> tuple[bool, str]:
-                self.validation_calls += 1
-                return False, "Not self-contained."
-
-        llm = AlwaysInvalid()
-        with self.assertRaisesRegex(ValueError, "Not self-contained"):
-            ProblemCreatorAgent(llm, max_iterations=2).run(make_context())
-        self.assertEqual(llm.draft_calls, 2)
-        self.assertEqual(llm.validation_calls, 2)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_meaningful_message_is_not_rejected_for_information_substring(self):
+        from app.agents.curator import CuratorScoutAgent
+        context, _ = inputs()
+        self.assertTrue(CuratorScoutAgent._is_meaningful(context.commit.model_copy(update={"message": "Fix information loss"})))

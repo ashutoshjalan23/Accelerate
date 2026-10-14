@@ -1,5 +1,6 @@
 """Curator and scout agent."""
 
+import re
 from .ports import EngineeringAnalyst, GitHubClient, LLMClient
 from .schemas import CodeContext, CommitData, RepositoryInput, SelectedCommit
 
@@ -30,7 +31,7 @@ class CuratorScoutAgent:
     ) -> SelectedCommit:
         """Return an accepted commit together with the LLM's assessment."""
 
-        repository_name = self._repository_name(str(repository.github_url))
+        repository_name = repository.repository
         commits = self.github.list_commits(repository_name, limit=50)
         candidates = [commit for commit in commits if self._is_meaningful(commit)]
         if not candidates:
@@ -45,10 +46,10 @@ class CuratorScoutAgent:
 
     @staticmethod
     def _repository_name(url: str) -> str:
-        return url.rstrip("/").removesuffix(".git").split("github.com/", 1)[-1]
+        return RepositoryInput(github_url=url).repository
 
     @staticmethod
     def _is_meaningful(commit: CommitData) -> bool:
         message = commit.message.lower()
         trivial_terms = ("readme", "typo", "format", "chore", "bump version")
-        return not any(term in message for term in trivial_terms)
+        return not any(re.search(r"\b" + re.escape(term) + r"\b", message) for term in trivial_terms)

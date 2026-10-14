@@ -1,221 +1,191 @@
 # Accelerate
 
-**Turn real-world open-source engineering into hands-on programming challenges.**
+Learn engineering by fixing real open-source code in your own environment.
 
-Accelerate is an agentic learning platform that transforms meaningful commits from popular open-source repositories into interactive programming and system-design challenges.
+Accelerate turns meaningful GitHub commits into focused local-repository challenges.
+It gives you an issue statement, acceptance criteria, relevant directories/files,
+and Git commands to check out the **parent revision before the fix**. Use your editor
+and the repository's tools, then reveal the actual maintainer diff to compare approaches.
 
-Instead of learning software engineering only through tutorials and predefined exercises, Accelerate lets you explore how real software evolves. Enter a GitHub repository, and a team of AI agents investigates its commit history, reconstructs the engineering problem behind a change, and turns it into a challenge you can solve yourself.
+## Learner workflow
 
-## The Idea
+1. Enter a GitHub repository URL or `owner/repository`, or open a saved challenge.
+2. Copy the checkout commands into your terminal. They clone into a fresh folder,
+   check out the exact parent SHA, and create an `accelerate/` working branch.
+3. Read the checkout's README/contribution guide and set up its environment.
+4. Implement your solution and run the relevant repository tests/build checks locally.
+5. Inspect `git diff <parent-sha>`, then reveal the maintainer's original patch.
 
-Great engineering lessons are hidden inside open-source repositories: performance bottlenecks, architectural decisions, concurrency problems, scalability challenges, and clever algorithmic improvements.
+Different patches can be correct. Compare behavior, maintainability, and trade-offs;
+Accelerate does not grade code or execute learner submissions. Git diff includes tracked
+files; use `git add -N <new-file>` to include new files before comparing.
 
-Accelerate aims to uncover these lessons and turn them into opportunities to learn by doing.
+The normal challenge responses exclude the fix SHA, commit message, PR description,
+and patch. Reveal fetches those separately. This is a learning reveal, not secrecy:
+the original fix remains discoverable in the public repository's history.
 
-## Local configuration
-
-Install the dependencies, copy `.env.example` to `.env`, and add your
-credentials to `.env`:
-
-```powershell
-Copy-Item .env.example .env
-& ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
-```
-
-The application reads `GITHUB_TOKEN`, `GEMINI_API_KEY`, and the optional
-`OPENROUTER_API_KEY` from `.env`. The `.env` file is ignored by Git and must
-never be committed.
-
-### Optional top-level LangGraph workflow
-
-The direct pipeline remains the default. A top-level LangGraph workflow is
-available as an opt-in orchestration layer around the existing typed agents:
-
-```powershell
-& ".\.venv\Scripts\python.exe" tests\langgraph_generation_test.py pallets/flask
-```
-
-To run only the LangGraph Problem Creator from a cached analyst result:
-
-```powershell
-& ".\.venv\Scripts\python.exe" tests\langgraph_generation_test.py `
-  pallets/flask --cached-sha COMMIT_SHA
-```
-
-**The core loop:**
-
-1. Enter a GitHub repository.
-2. Discover a meaningful engineering change.
-3. Understand the problem and constraints behind it.
-4. Receive a challenge inspired by the real-world change.
-5. Solve it, review the solution, and learn from the original implementation.
-
-## Features
-
-- **Repository-to-challenge generation:** Submit a GitHub repository URL and automatically discover a meaningful commit.
-- **AI-powered engineering analysis:** Reconstruct the problem, constraints, and technical trade-offs behind a change.
-- **Dynamic problem generation:** Convert real engineering work into a self-contained challenge.
-- **Interactive coding interface:** Solve problems in a clean, HackerRank-inspired environment.
-- **Solution review:** Compare your approach with an AI-generated solution and learn from the original implementation.
-- **Explore challenges:** Browse a curated collection of problems generated from open-source projects.
-
-## How It Works
-
-Accelerate uses LangGraph for top-level orchestration and for the more
-complex reasoning workflows inside the Engineering Analyst and Problem
-Creator agents.
+## Architecture
 
 ```mermaid
-flowchart TD
-    A[GitHub Repository URL] --> B[Top-level LangGraph Workflow]
-    B --> C[Curator + Scout Agent]
+flowchart LR
+    A[Repository] --> B{Saved challenge?}
+    B -->|Yes| F[Challenge + checkout commands]
+    B -->|No, live generation enabled| C[Curator]
     C --> D[Engineering Analyst]
-    D --> E[Problem Creator Agent]
-    E --> F[Reviewer + Solutions Agent]
-    F --> G[Validated Challenge]
-    G --> H[React Web Interface]
-
-    D <--> D1[LangGraph Analysis Loop]
-    E <--> E1[LangGraph Generation Loop]
-
-    C -.-> I[GitHub API]
-    D -.-> J[Gemini / OpenRouter]
-    E -.-> J
-    F -.-> J
+    D --> E[Challenge Creator + validation]
+    E --> S[Immutable SQLite challenge]
+    S --> F
+    F --> G[Local checkout + implementation]
+    G --> H[Reveal actual maintainer diff]
 ```
 
-### 1. Curator + Scout Agent
+FastAPI exposes the local challenge API. LangGraph orchestrates generation and the
+bounded Analyst and Creator loops. Gemini is primary; OpenRouter is fallback.
+The Analyst reconstructs the before/after change. The Creator writes the task and
+acceptance criteria, without duplicating source files, creating synthetic hidden tests,
+or generating a reference implementation. Paths are grounded before validation;
+malformed drafts and unsupported paths can be revised within the iteration limit.
+Git commands and source links are assembled deterministically from verified metadata.
 
-Finds promising repositories and investigates their commit histories.
+| Agent | Responsibility |
+| --- | --- |
+| Curator | Select a meaningful commit using GitHub evidence and LLM assessment. |
+| Engineering Analyst | Reconstruct the issue from parent/fix source snapshots and fetch missing context within a bounded loop. |
+| Challenge Creator | Draft an issue statement, acceptance criteria, and relevant paths, then validate grounding and solution leakage. |
 
-Responsibilities:
-- Retrieve commits and associated metadata through the GitHub API.
-- Identify potentially meaningful changes.
-- Filter out trivial changes such as formatting, typo fixes, and routine dependency updates.
-- Select commits that contain enough engineering substance to become useful challenges.
+This is a LangGraph-orchestrated multi-agent pipeline. The agents have distinct
+roles and exchange structured Pydantic models; the application controls sequencing,
+retries, persistence, and the solution reveal.
 
-### 2. Engineering Analyst Agent
+Generation first reuses saved challenges. If none exist, live generation can reuse a
+cached analyst context before scouting GitHub. Creating a new statement from an analyst
+cache still calls the LLM. Cached-only requests use saved challenges and never call
+GitHub or an LLM; cache misses return HTTP 409.
 
-Reconstructs the engineering problem behind a selected commit.
+| Request path | Model work |
+| --- | --- |
+| Saved challenge | None; return the persisted challenge. |
+| Cached analyst context, live generation enabled | Challenge drafting and validation; skip scouting and analysis. |
+| Completely new repository | Commit assessment, engineering analysis, challenge drafting, and validation. |
+| Maintainer solution reveal | None; return stored commit evidence. |
 
-Responsibilities:
-- Inspect the commit diff and surrounding code.
-- Retrieve relevant parent-version code, tests, pull requests, and issue discussions where available.
-- Infer the original problem, requirements, constraints, and technical trade-offs.
-- Identify missing information and retrieve additional evidence when necessary.
+Even for new repositories, the Creator does not generate hidden tests, starter
+source files, or a reference implementation. Checkout commands come from Git
+metadata and the solution is the original maintainer diff. Actual provider costs
+vary with evidence size, candidate assessments, retries, and model selection;
+per-request token and cost measurement is not implemented yet.
 
-**Powered by LangGraph:** This agent follows an iterative analysis workflow, gathering evidence and refining its understanding until it has enough information or reaches a defined limit.
+## Local setup
 
-### 3. Problem Creator Agent
+Requires Python 3.12+, Node.js 20.19+ or 22.12+, and Git.
 
-Transforms the engineering analysis into a challenge that can be solved independently.
+The local-repository architecture is on `codex/local-repository-challenges`:
 
-Responsibilities:
-- Define a clear problem statement.
-- Specify functional requirements and constraints.
-- Provide relevant inputs, outputs, and examples.
-- Include edge cases and failure scenarios.
-- Create test cases and evaluation criteria where applicable.
-- Ensure the challenge does not depend on knowing the original implementation.
+```powershell
+git clone https://github.com/ashutoshjalan23/Accelerate.git
+Set-Location Accelerate
+git switch codex/local-repository-challenges
+```
 
-**Powered by LangGraph:** An iterative generation workflow checks whether the problem is clear, grounded in the available evidence, and sufficiently self-contained before returning it.
+```powershell
+python -m venv .venv
+Copy-Item .env.example .env
+& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
 
-### 4. Reviewer + Solutions Agent
+Add `GITHUB_TOKEN`, `GEMINI_API_KEY`, and optional `OPENROUTER_API_KEY` for live
+generation. Saved demos require no credentials. Model IDs are configurable with
+`GEMINI_MODEL` and `OPENROUTER_MODEL`; choose IDs available to your provider account.
 
-Acts as the final quality gate.
+Load the curated Flask and xxHash demos derived from existing cached data:
 
-Responsibilities:
-- Verify that the challenge is consistent with the repository evidence.
-- Check that the requirements are unambiguous and the problem is solvable.
-- Generate a reference solution or solution outline appropriate to the challenge.
-- Validate examples and test cases where possible.
-- Identify answer leakage, unsupported assumptions, and unnecessary complexity.
-- Request revisions or reject low-quality challenges.
+```powershell
+& .\.venv\Scripts\python.exe -m app.seed_cached --demo
+& .\.venv\Scripts\python.exe -m uvicorn app.api:app --reload
+```
 
-The workflow should use bounded retries and reject challenges that cannot be grounded reliably in the available evidence.
+In a second terminal:
 
-## Agent Architecture
+```powershell
+Set-Location frontend
+npm ci
+npm run dev
+```
 
-Accelerate uses LangGraph as its orchestration tool.
+Open http://localhost:5173. The API defaults to http://localhost:8000.
+`frontend/.env.example` documents `VITE_API_URL`. CORS permits localhost and
+127.0.0.1 on port 5173; configure `ACCELERATE_CORS_ORIGINS` for other clients.
+The frontend starts in saved-only mode. Turn that option off to allow live generation.
 
-| Technology | Responsibility |
-|---|---|
-| LangGraph | Coordinates the overall workflow and manages stateful, iterative reasoning inside the Engineering Analyst and Problem Creator agents. |
-| Gemini | Primary language model for analysis and generation. |
-| OpenRouter | Fallback model access when the primary provider is unavailable or unsuitable. |
+Saved challenges use `.data/accelerate.sqlite3` (`local_challenges` table); analyst
+snapshots use `.cache/analyst`. The old prototype tables remain untouched. To import
+other legacy generated challenges instead of curated demos, run `python -m app.seed_cached`
+and inspect their statements for quality. Seed operations are idempotent; saved
+challenges are immutable for a repository/fix SHA. The demos have manually edited
+statements but unmodified cached commit evidence. Their environment setup and fixes
+have not been executed in the source repositories as part of this implementation.
 
-The overall workflow and the selected agents use LangGraph to manage typed
-state, conditional transitions, caching, and bounded reasoning loops.
+## API
 
-The goal is not to make every agent autonomous. Each agent has a defined responsibility, structured inputs and outputs, and clear stopping conditions.
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | API readiness |
+| `GET /challenges?limit=20` | Saved learner-facing challenges |
+| `POST /challenges/generate` | Open a saved challenge or explicitly generate one |
+| `GET /challenges/{id}` | Statement, scope, and local checkout commands |
+| `GET /challenges/{id}/solution` | Explicit reveal of original commit evidence and comparison commands |
 
-## User Interface
+Generation request:
 
-Accelerate will have a minimalist web interface focused on discovering and solving engineering problems.
+```json
+{"github_url": "pallets/flask", "use_cache": true, "cache_only": true}
+```
 
-### Home page
+Set `cache_only: false` to permit model calls on a cache miss. New generation is
+synchronous in this iteration; the frontend waits up to five minutes. Async jobs,
+progress tracking, and candidate reselection after downstream rejection remain future work.
+The previous code submission/review endpoints and hosted execution runner are removed.
 
-- A clean landing page with a GitHub repository input bar.
-- A prominent action to generate a challenge.
-- A featured problems section containing curated challenges from open-source projects.
+For a new repository, explicitly allow generation:
 
-### Challenge page
+```json
+{"github_url": "https://github.com/owner/repository", "use_cache": true, "cache_only": false}
+```
 
-The challenge interface will take inspiration from HackerRank, prioritizing readability and an uninterrupted solving experience.
+The response contains `challenge_id`, `cached`, and a `challenge` object with
+`problem` and `workspace`. The workspace includes `base_sha`, `checkout_commands`,
+`relevant_directories`, parent-revision file links, and `local_diff_command`.
+Added files are marked as new; renamed files link to their original parent path.
 
-Planned elements include:
-- Problem description and engineering context.
-- Requirements, constraints, examples, and test cases.
-- A code editor and language selection.
-- Run and submit controls.
-- Test results and execution feedback.
-- A solution and explanation section, revealed when the learner is ready.
+## Verification without token costs
 
-System-design challenges may use a structured answer interface instead of a code editor when executable code is not the appropriate way to evaluate a solution.
+```powershell
+& .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+& .\.venv\Scripts\python.exe -B -m unittest discover -s tests -p 'test_*.py' -v
+Set-Location frontend
+npm test
+npm run build
+```
 
-## Technology Stack
+Tests use the checked-in cached demo evidence and mocked providers, covering cache-only
+behavior, solution privacy, parent revision checkout commands, immutable persistence,
+non-Python tasks, invalid drafts, and bounded validation. Tests do not execute remote
+repository setup or require provider credentials. CLI scripts `test.py`,
+`tests/analyst_test.py`, and `tests/langgraph_generation_test.py` are manual live
+experiments and can incur provider costs; they are not part of automated discovery.
+Install `requirements-dev.txt` if your environment needs the HTTP test-client dependency.
 
-| Layer | Technology |
-|---|---|
-| Language models | Google Gemini, with OpenRouter as fallback |
-| Agent orchestration and stateful workflows | LangGraph |
-| Repository data | GitHub API |
-| Structured outputs and validation | Pydantic |
-| Backend API | FastAPI |
-| Frontend | React + Vite |
-| Database | SQL-based persistence |
+Current verification: **20 backend tests and 3 frontend tests pass**, and the Vite
+production build succeeds. The checkout integration test executes generated commands
+against a real local Git history and confirms the learner starts at the parent SHA.
+Browser visual checks and execution of the source repositories remain unverified.
 
-The GitHub integration will handle repository metadata, commit history, diffs, and related engineering context. Pydantic models will define structured data contracts between agents, while FastAPI will expose the backend to the frontend.
+## Current development status
 
-The database will support persistence for generated challenges and related metadata.
-
-## Guiding Principles
-
-**Ground challenges in real engineering.** Every challenge should be traceable to repository evidence. The system must distinguish documented facts from inferred design intent.
-
-**Teach, don't just generate.** The objective is to help learners develop engineering judgment, not merely produce more exercises.
-
-**Reward understanding.** Challenges should require reasoning about algorithms, architecture, constraints, and trade-offs rather than reproducing the original code.
-
-**Quality over quantity.** A small number of well-grounded, thoughtfully designed challenges is more valuable than a large collection of generic AI-generated problems.
-
-**Keep the learner in control.** Solutions and explanations should help learners understand their mistakes without removing the opportunity to solve the challenge independently.
-
-## Development Roadmap
-
-- [ ] **Phase 1 — Repository ingestion:** Accept a GitHub URL and retrieve repository metadata, commits, and diffs.
-- [ ] **Phase 2 — Commit selection:** Build the Curator + Scout workflow to identify meaningful engineering changes.
-- [ ] **Phase 3 — Engineering reconstruction:** Implement the Engineering Analyst with a LangGraph analysis loop.
-- [ ] **Phase 4 — Challenge generation:** Build the Problem Creator with structured, validated outputs.
-- [ ] **Phase 5 — Quality assurance:** Implement the Reviewer + Solutions Agent and bounded revision loops.
-- [ ] **Phase 6 — Backend integration:** Expose the workflow through FastAPI and persist challenges in SQL.
-- [ ] **Phase 7 — Frontend:** Build the repository input page, featured problems section, and HackerRank-inspired challenge interface.
-- [ ] **Phase 8 — Evaluation:** Test challenge quality, grounding, solvability, generation latency, and cost.
-
-## The Long-Term Vision
-
-Accelerate aims to make the world's open-source engineering knowledge more accessible.
-
-Every meaningful commit is a potential lesson. By turning those lessons into interactive challenges, Accelerate can help developers move beyond writing code that works toward understanding why systems are designed the way they are, what constraints shape engineering decisions, and how to solve unfamiliar problems independently.
-
-**Learn from the code that builds the world.**
+- Implemented: repository ingestion, commit selection, bounded analysis/generation,
+  SQLite persistence, cached demos, local checkout instructions, minimal React UI,
+  and explicit maintainer diff reveal.
+- Next: verify challenge quality across repositories, measure generation cost/latency,
+  improve setup evidence retrieval, and move live generation into background jobs.
+- Possible later addition: optional AI feedback on a learner's patch. This version
+  focuses on local verification and self-comparison, with no generated scores.

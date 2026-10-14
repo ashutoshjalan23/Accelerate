@@ -1,4 +1,4 @@
-"""Run the opt-in top-level LangGraph generation workflow."""
+"""Run live LangGraph generation; provider calls may incur costs."""
 
 import argparse
 import pathlib
@@ -47,6 +47,8 @@ def main() -> int:
         print(f"Title:      {problem.title}")
         print("\nProblem statement:")
         print(problem.description)
+        from app.local_challenge import workspace
+        print("\n".join(workspace(context.commit, problem)["checkout_commands"]))
         return 0
     except (RuntimeError, ValueError) as error:
         print(f"LangGraph generation test failed: {error}", file=sys.stderr)
