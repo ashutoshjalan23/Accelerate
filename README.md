@@ -47,14 +47,45 @@ or generating a reference implementation. Paths are grounded before validation;
 malformed drafts and unsupported paths can be revised within the iteration limit.
 Git commands and source links are assembled deterministically from verified metadata.
 
+| Agent | Responsibility |
+| --- | --- |
+| Curator | Select a meaningful commit using GitHub evidence and LLM assessment. |
+| Engineering Analyst | Reconstruct the issue from parent/fix source snapshots and fetch missing context within a bounded loop. |
+| Challenge Creator | Draft an issue statement, acceptance criteria, and relevant paths, then validate grounding and solution leakage. |
+
+This is a LangGraph-orchestrated multi-agent pipeline. The agents have distinct
+roles and exchange structured Pydantic models; the application controls sequencing,
+retries, persistence, and the solution reveal.
+
 Generation first reuses saved challenges. If none exist, live generation can reuse a
 cached analyst context before scouting GitHub. Creating a new statement from an analyst
 cache still calls the LLM. Cached-only requests use saved challenges and never call
 GitHub or an LLM; cache misses return HTTP 409.
 
+| Request path | Model work |
+| --- | --- |
+| Saved challenge | None; return the persisted challenge. |
+| Cached analyst context, live generation enabled | Challenge drafting and validation; skip scouting and analysis. |
+| Completely new repository | Commit assessment, engineering analysis, challenge drafting, and validation. |
+| Maintainer solution reveal | None; return stored commit evidence. |
+
+Even for new repositories, the Creator does not generate hidden tests, starter
+source files, or a reference implementation. Checkout commands come from Git
+metadata and the solution is the original maintainer diff. Actual provider costs
+vary with evidence size, candidate assessments, retries, and model selection;
+per-request token and cost measurement is not implemented yet.
+
 ## Local setup
 
 Requires Python 3.12+, Node.js 20.19+ or 22.12+, and Git.
+
+The local-repository architecture is on `codex/local-repository-challenges`:
+
+```powershell
+git clone https://github.com/ashutoshjalan23/Accelerate.git
+Set-Location Accelerate
+git switch codex/local-repository-challenges
+```
 
 ```powershell
 python -m venv .venv
@@ -77,7 +108,7 @@ In a second terminal:
 
 ```powershell
 Set-Location frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -115,9 +146,21 @@ synchronous in this iteration; the frontend waits up to five minutes. Async jobs
 progress tracking, and candidate reselection after downstream rejection remain future work.
 The previous code submission/review endpoints and hosted execution runner are removed.
 
+For a new repository, explicitly allow generation:
+
+```json
+{"github_url": "https://github.com/owner/repository", "use_cache": true, "cache_only": false}
+```
+
+The response contains `challenge_id`, `cached`, and a `challenge` object with
+`problem` and `workspace`. The workspace includes `base_sha`, `checkout_commands`,
+`relevant_directories`, parent-revision file links, and `local_diff_command`.
+Added files are marked as new; renamed files link to their original parent path.
+
 ## Verification without token costs
 
 ```powershell
+& .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 & .\.venv\Scripts\python.exe -B -m unittest discover -s tests -p 'test_*.py' -v
 Set-Location frontend
 npm test
@@ -131,6 +174,11 @@ repository setup or require provider credentials. CLI scripts `test.py`,
 `tests/analyst_test.py`, and `tests/langgraph_generation_test.py` are manual live
 experiments and can incur provider costs; they are not part of automated discovery.
 Install `requirements-dev.txt` if your environment needs the HTTP test-client dependency.
+
+Current verification: **20 backend tests and 3 frontend tests pass**, and the Vite
+production build succeeds. The checkout integration test executes generated commands
+against a real local Git history and confirms the learner starts at the parent SHA.
+Browser visual checks and execution of the source repositories remain unverified.
 
 ## Current development status
 
